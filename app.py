@@ -2391,15 +2391,7 @@ def scan_channel_plus(message):
 
         if row:
             user_id, full_number = row
-
-            from datetime import datetime
             current_time = datetime.now().strftime("%I:%M %p")
-
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                
-                
-            )
 
             formatted_msg = f"""
 ┌─────────────────────┐
@@ -2411,13 +2403,8 @@ def scan_channel_plus(message):
 <blockquote>⚠️ <i>لا تشارك هذا الرمز مع أي شخص.</i></blockquote>
 └─────────────────────┘
 """
-            bot.send_message(
-                user_id,
-                formatted_msg,
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
 
+            bot.send_message(user_id, formatted_msg, parse_mode="HTML")
             log_otp(full_number, otp_code, "كود بلس")
             release_number(full_number)
             print(f"✅ تم إرسال الكود {otp_code} للمستخدم {user_id}")
@@ -2426,6 +2413,23 @@ def scan_channel_plus(message):
     except Exception as e:
         print(f"❌ خطأ: {e}")
 
+# ======================
+# 🌐 تشغيل خادم HTTP عشان Render ما يطفش
+# ======================
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', 8080), HealthHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_health_server, daemon=True).start()
 
 # ==========================
 # if __name__ == "__main__":
