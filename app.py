@@ -102,6 +102,53 @@ FORCE_SUB_CHANNEL = None
 FORCE_SUB_ENABLED = False
 BOT_ACTIVE = True 
 
+# ======================
+# 🎨 شعارات SVG مدمجة (ما تنحجب أبداً) للمنصات
+# ======================
+SERVICE_SVGS = {
+    "whatsapp": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2325D366'/><path fill='%23fff' d='M50 18c-17.6 0-32 14.4-32 32 0 6 1.7 11.8 4.8 16.8L18 82l15.6-4.7C38.6 80.1 44.2 82 50 82c17.6 0 32-14.4 32-32S67.6 18 50 18zm18.6 45.6c-.8 2.2-4.6 4.2-6.4 4.5-1.6.3-3.7.4-5.9-.4-1.4-.5-3.1-1.1-5.4-2.2-9.5-4.1-15.7-13.7-16.2-14.3-.5-.7-3.9-5.1-3.9-9.7s2.4-6.9 3.3-7.9c.9-.9 1.9-1.2 2.6-1.2.6 0 1.2 0 1.7 0 .6 0 1.3-.2 2 .1 1.6.7 2.6 3 2.9 3.9.3.9.5 1.5 0 2.4-.4.9-1.5 2.4-2.2 3.4 0 0 .7.7 1.4 1.5 2.4 2.7 5.3 5.5 9.6 7.1 1.5.5 2.3.6 3-.4.6-1 2.5-3 3.2-4 .7-1 1.4-.8 2.3-.5.9.3 5.8 2.7 6.8 3.2 1 .5 1.6.7 1.8 1.1.2.5.2 2.5-.6 4.7z'/></svg>",
+    "telegram": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2326A5E4'/><path fill='%23fff' d='M22 50l50-22-7 48-18-8-7 12-3-17 31-26-37 24-9-4z'/></svg>",
+    "tiktok": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='48' fill='%23000'/><path fill='%2325F4EE' d='M62 22c2 8 8 14 16 15v9c-6 0-12-2-16-5v22c0 12-9 20-20 20s-20-8-20-20 9-21 20-21v9c-6 0-11 5-11 12s5 12 11 12 12-6 12-12V22h8z'/><path fill='%23FE2C55' d='M70 22c2 8 8 14 16 15v9c-6 0-12-2-16-5v22c0 12-9 20-20 20v-9c6 0 12-6 12-12V22h8z'/></svg>",
+    "facebook": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%231877F2'/><path fill='%23fff' d='M58 84V52h10l1-12H58v-7c0-3 1-5 5-5h6V17h-9c-10 0-15 6-15 14v9H36v12h9v32h13z'/></svg>",
+    "instagram": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><radialGradient id='ig' cx='30%25' cy='30%25' r='80%25'><stop offset='0%25' stop-color='%23FEDA75'/><stop offset='50%25' stop-color='%23FA7E1E'/><stop offset='100%25' stop-color='%23D62976'/></radialGradient></defs><rect width='100' height='100' rx='22' fill='url(%23ig)'/><rect x='22' y='22' width='56' height='56' rx='14' fill='none' stroke='%23fff' stroke-width='5'/><circle cx='50' cy='50' r='13' fill='none' stroke='%23fff' stroke-width='5'/><circle cx='72' cy='28' r='4' fill='%23fff'/></svg>",
+    "snapchat": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23FFFC00'/><path fill='%23000' d='M50 16c-13 0-23 9-23 21 0 6 1 11 2 16-2 1-4 2-7 2-1 0-2 1-2 2 0 4 8 5 11 7 1 1 1 4 2 6 1 3 4 5 8 5 3 0 5-1 7-1 3 0 6 6 13 6 7 0 10-6 13-6 2 0 4 1 7 1 4 0 7-2 8-5 1-2 1-5 2-6 3-2 11-3 11-7 0-1-1-2-2-2-3 0-5-1-7-2 1-5 2-10 2-16 0-12-10-21-23-21-3 0-6 1-8 2-2-1-5-2-8-2z'/></svg>",
+    "google": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23fff'/><path fill='%234285F4' d='M58 50c0-1-.1-2-.2-3H50v6h5.5c-.5 2-2 4-4.5 5l4 3c3-2 5-6 5-10z'/><path fill='%2334A853' d='M40 56c1 4 4 7 9 7 3 0 5-1 7-3l-4-3c-1 1-2 1-4 1-3 0-5-2-6-4z'/><path fill='%23FBBC04' d='M40 44l-4 2c-1 1-1 3-1 4s0 3 1 4l4-2c-.5-1-.5-2-.5-3z'/><path fill='%23EA4335' d='M50 36c3 0 5 1 6 2l-3 3c-1-1-2-1-4-1-5 0-9 4-9 4l-4-2c0-3 4-6 14-6z'/></svg>",
+    "twitter": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23000'/><path fill='%23fff' d='M70 35c-2 1-4 1-6 1 2-1 4-3 5-5-2 1-4 2-7 2-2-2-5-3-8-3-6 0-11 5-11 11 0 1 0 2 .3 3-9 0-17-5-22-12-1 2-1 4-1 6 0 4 2 7 5 9-2 0-4-1-5-2v.1c0 5 4 10 9 11-1 0-3 .5-4 .5-1 0-2 0-3-.1 2 4 6 7 11 7-4 3-9 5-15 5-1 0-2 0-3-.1 5 3 11 5 18 5 21 0 33-18 33-33v-1c2-2 4-3 6-6z'/></svg>",
+    "linkedin": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230077B5'/><rect x='22' y='40' width='12' height='42' fill='%23fff'/><circle cx='28' cy='28' r='7' fill='%23fff'/><path fill='%23fff' d='M44 40h12v6c2-4 7-7 13-7 12 0 14 8 14 18v25h-12V60c0-6-2-10-7-10s-8 4-8 10v22H44z'/></svg>",
+    "discord": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235865F2'/><path fill='%23fff' d='M70 32c-4-2-9-3-14-4l-1 3c-5-1-10-1-15 0l-1-3c-5 1-10 2-14 4C18 47 16 62 18 76c5 4 9 6 14 7l3-5c-2-1-4-2-5-3 0 0 1-1 1-1 11 5 22 5 33 0 0 0 1 1 1 1-1 1-3 2-5 3l3 5c5-1 9-3 14-7 2-16-1-31-7-44zM42 67c-3 0-5-3-5-6s2-6 5-6 5 3 5 6-2 6-5 6zm16 0c-3 0-5-3-5-6s2-6 5-6 5 3 5 6-2 6-5 6z'/></svg>",
+    "amazon": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2323263c'/><path fill='%23FF9900' d='M30 60c10 8 40 12 50 0 1-1 2 0 1 1-9 13-30 12-43 7-2-1-5-2-7 0-1 1-2 2-2 4 0 0-2-2-2-5 0-3 2-5 3-7zm50-5c2-2 6-3 9-1 2 1 3 4 2 7l-2-1c1-2 0-5-2-6-1 0-3 0-4 2-1-1-2-1-3-1zm-5 4c0-2 1-4 3-5 2 0 4 1 4 4 0 1 1 4-1 5-1 1-4 1-5-1-1-1-1-2-1-3zm5 1c0 1 0 2 1 3 1 0 1-1 1-3 0-1 0-2-1-2s-1 1-1 2z'/></svg>",
+}
+
+# ربط كود الخدمة بالشعار الصحيح
+SERVICE_TO_KEY = {
+    "#WP": "whatsapp", "#TG": "telegram", "#TT": "tiktok", "#FB": "facebook",
+    "#IG": "instagram", "#SC": "snapchat", "#GG": "google", "#TW": "twitter",
+    "#DC": "discord", "#AMZ": "amazon", "#APL": "google", "#MS": "google",
+    "#IN": "linkedin", "#UB": "telegram", "#NF": "google", "#SP": "google",
+    "#YT": "google", "#GH": "google", "#PP": "google", "#BK": "telegram",
+    "#AB": "google", "#OLX": "google", "#STC": "whatsapp", "#TL": "telegram",
+}
+
+SERVICE_NAMES_AR = {
+    "#WP": "واتساب", "#TG": "تيليجرام", "#TT": "تيك توك",
+    "#FB": "فيسبوك", "#IG": "انستقرام", "#SC": "سناب شات",
+    "#GG": "جوجل", "#TW": "تويتر/X", "#DC": "ديسكورد",
+    "#AMZ": "امازون", "#APL": "ابل", "#MS": "مايكروسوفت",
+    "#IN": "لينكدإن", "#UB": "اوبر", "#NF": "نتفلكس",
+    "#SP": "سبوتيفاي", "#YT": "يوتيوب", "#GH": "جيت هاب",
+    "#PP": "باي بال", "#BK": "بوكينج", "#AB": "ايربنب",
+    "#OLX": "اوليكس", "#STC": "اس تي سي", "#TL": "تالا",
+}
+
+def get_service_logo(service_code):
+    """يرجع SVG مدمج للمنصة"""
+    key = SERVICE_TO_KEY.get(service_code, "")
+    return SERVICE_SVGS.get(key)
+
+def get_service_name(service_code):
+    """يرجع اسم المنصة بالعربي"""
+    return SERVICE_NAMES_AR.get(service_code, service_code.replace("#", ""))
+
 if not BOT_TOKEN:
     raise SystemExit("❌ BOT_TOKEN must be set in Secrets (Environment Variables)")
 if not CHAT_IDS:
@@ -2108,9 +2155,9 @@ def send_otp_to_user_and_group(date_str, number, sms):
         except Exception as e:
             print(f"[!] فشل إرسال OTP للمستخدم {user_id}: {e}")
     
-    # إرسال نفس الرسالة للجروب
+    # إرسال نفس الرسالة للجروب (مع شعار المنصة الحقيقي)
     text = format_message(date_str, number, sms)
-    send_to_telegram_group(text, otp_code)
+    send_to_telegram_group(text, otp_code, service)
 
 def delete_message_after_delay(chat_id, message_id, delay=150):
     """تحذف الرسالة بعد مرور delay ثانية"""
@@ -2122,59 +2169,112 @@ def delete_message_after_delay(chat_id, message_id, delay=150):
     except Exception as e:
         print(f"❌ فشل حذف الرسالة: {e}")
 
-def send_to_telegram_group(text, otp_code):
+def send_to_telegram_group(text, otp_code, service_code=""):
+    """
+    يرسل الكود للجروب مع شعار المنصة الحقيقي المدمج
+    """
     success_count = 0
-    try:
-        # بناء لوحة الأزرار لتطابق الصورة تماماً
-        keyboard = {
-            "inline_keyboard": [
-                # الزر الأول: نسخ الكود (بشكل عريض)
-                [{"text": f"🙈 {otp_code}", "copy_text": {"text": str(otp_code)}}],
-                
-                # الصف الثاني: زر القناة وزر لوحة البوت
-                [
-                    {"text": "💬 𝐶ℎ𝑎𝑡 ↗️", "url": "https://t.me/jsjsgsjsvh"},
-                    {"text": "🤖 𝑂𝑝𝑒𝑛 𝐵𝑜𝑡 ↗️", "url": "https://t.me/MO_5_H_ABOT"}
-                ],
-                
-                # الصف الثالث: زر المطور
-                [
-                    {"text": "𝑀𝑟: 𝐶𝑜𝑚𝑚𝑎𝑛𝑑𝑜 ↗️", "url": "https://t.me/CM_ED871"}
-                ]
-            ]
-        }
-    except Exception as e:
-        print(f"❌ خطأ في إعداد الأزرار: {e}")
-        return False
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
+    # استرجاع SVG مدمج للمنصة
+    logo_svg = get_service_logo(service_code) if service_code else None
+    service_name = get_service_name(service_code) if service_code else "OTP"
+    
+    # بناء لوحة الأزرار (لمعة وشعار + روابط)
+    keyboard = {
+        "inline_keyboard": [
+            # الزر الأول: نسخ الكود بشكل واضح ومع إيموجي
+            [{"text": f"🔑 {otp_code} — اضغط للنسخ", "copy_text": {"text": str(otp_code)}}],
+            
+            # الصف الثاني: زر القناة وزر البوت
+            [
+                {"text": "💬 𝐶ℎ𝑎𝑡 ↗️", "url": "https://t.me/jsjsgsjsvh"},
+                {"text": "🤖 𝑂𝑝𝑒𝑛 𝐵𝑜𝑡 ↗️", "url": "https://t.me/MO_5_H_ABOT"}
+            ],
+            
+            # الصف الثالث: المطور
+            [
+                {"text": "𝑀𝑟: 𝐶𝑜𝑚𝑚𝑎𝑛𝑑𝑜 ↗️", "url": "https://t.me/CM_ED871"}
+            ]
+        ]
+    }
+    
+    # إذا عندنا SVG مدمج، نرسل الصورة أولاً ثم النص
+    if logo_svg:
+        # ترميز الـ SVG بـ base64 لإرساله كصورة
+        import base64 as _b64
+        try:
+            # استخراج محتوى الـ SVG من data URL
+            svg_content = logo_svg.split(',', 1)[1]
+            # decode URL encoding
+            from urllib.parse import unquote as _unq
+            svg_content = _unq(svg_content)
+            svg_bytes = svg_content.encode('utf-8')
+            
+            import io
+            # نرسل الصورة عبر sendPhoto مع Caption يحتوي الكود
+            for chat_id in CHAT_IDS:
+                try:
+                    url_photo = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+                    # بناء Caption مضيء
+                    caption = (
+                        f"✨ <b>{service_name}</b> ✨\n\n"
+                        f"<b>{text}</b>\n\n"
+                        f"🔐 <b>الكود:</b> <code>{otp_code}</code>"
+                    )
+                    
+                    files = {'photo': ('logo.svg', io.BytesIO(svg_bytes), 'image/svg+xml')}
+                    data = {
+                        'chat_id': chat_id,
+                        'caption': caption,
+                        'parse_mode': 'HTML',
+                        'reply_markup': json.dumps(keyboard)
+                    }
+                    resp = requests.post(url_photo, files=files, data=data, timeout=15)
+                    
+                    if resp.status_code == 200:
+                        print(f"[+] تم إرسال الصورة بنجاح إلى: {chat_id}")
+                        success_count += 1
+                        # حذف بعد 150 ثانية
+                        msg_id = resp.json()["result"]["message_id"]
+                        threading.Thread(
+                            target=delete_message_after_delay,
+                            args=(chat_id, msg_id, 150),
+                            daemon=True
+                        ).start()
+                        continue  # تخطي إرسال النص لأن الصورة تحتويه
+                    else:
+                        print(f"[!] فشل إرسال الصورة، محاولة إرسال نص: {resp.status_code}")
+                except Exception as e:
+                    print(f"[!] خطأ إرسال الصورة: {e}")
+        except Exception as e:
+            print(f"[!] خطأ في معالجة SVG: {e}")
+    
+    # الإرسال النصي الاحتياطي
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     for chat_id in CHAT_IDS:
         try:
             payload = {
                 "chat_id": chat_id,
-                "text": text,
+                "text": f"✨ <b>{service_name}</b>\n\n{text}",
                 "parse_mode": "HTML",
                 "reply_markup": json.dumps(keyboard)
             }
             resp = requests.post(url, data=payload, timeout=10)
             
             if resp.status_code == 200:
-                print(f"[+] تم إرسال الرسالة بنجاح إلى: {chat_id}")
+                print(f"[+] تم إرسال الرسالة النصية بنجاح إلى: {chat_id}")
                 success_count += 1
-
-                # حذف الرسالة بعد 150 ثانية
                 msg_id = resp.json()["result"]["message_id"]
                 threading.Thread(
-                    target=delete_message_after_delay, 
-                    args=(chat_id, msg_id, 150), 
+                    target=delete_message_after_delay,
+                    args=(chat_id, msg_id, 150),
                     daemon=True
                 ).start()
             else:
                 print(f"[!] فشل إرسال إلى {chat_id}: {resp.status_code}")
         except Exception as e:
             print(f"[!] خطأ في الإرسال لـ {chat_id}: {e}")
-
+    
     return success_count > 0
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("copy_"))
