@@ -126,7 +126,7 @@ OWNER_2_LINK = "https://t.me/+xvDMfX16pag1ZGVi"
 # ======================
 # 🤖 إعدادات البوت
 # ======================
-BOT_TOKEN = "8814038881:AAGyuACUYA4YPKlJQhAyUMkpRNiV0u1gNuU"
+BOT_TOKEN = "8991286066:AAEIbrmt328hjvSqMeBQL-eDQo2-4fk7Td8"
 CHAT_IDS = ["-1003006709377"]
 REFRESH_INTERVAL = 2
 ADMIN_IDS = [7325566792, 8670424681]
