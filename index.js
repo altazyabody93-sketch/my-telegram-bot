@@ -1,9 +1,10 @@
 const TelegramBot = require('node-telegram-bot-api');
 const admin = require('firebase-admin');
 
-// 1. تهيئة مفتاح Firebase Admin SDK
+// استدعاء ملف مفتاح الفايربيس
 const serviceAccount = require('./serviceAccountKey.json');
 
+// تهيئة تطبيق Firebase Admin
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://almatariapp-default-rtdb.firebaseio.com"
@@ -11,56 +12,84 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// 2. بيانات بوت التليجرام الخاص بك
-const token = '8293095450:AAFM_dU1yMkijpE1Tf9qoH19jzNOsXd46Ug';
+// التوكين الجديد وآيدي الجروب الخاص بك
+const token = '8645315475:AAHvn0mU_IAqa3ItSiBamh-rZ6Ap9kX4RuE';
+const GROUP_CHAT_ID = '-1004470276950';
+
 const bot = new TelegramBot(token, { polling: true });
 
-console.log("🚀 بوت الدعم الفني يعقوب يعمل الآن وجاهز لمراقبة الرسائل...");
+console.log("🚀 بوت الدعم الفني للمطري يعمل الآن وجاهز للمحادثات...");
 
-// 3. مراقبة الردود في قناة/جروب التليجرام
+// 1. استماع الرسائل القادمة من الفايربيس وتوجيهها للجروب (Firebase -> Telegram)
+db.ref().on('child_added', (snapshot) => {
+  const userToken = snapshot.key;
+  
+  // الاستماع للرسائل الجديدة داخل كل مستخدم
+  db.ref(`${userToken}/messages`).limitToLast(1).on('child_added', async (msgSnap) => {
+    const msg = msgSnap.val();
+
+    // نتحقق أن الرسالة مرسلة من التطبيق (isUser == true)
+    if (msg && msg.isUser) {
+      const captionText = `💬 **رسالة جديدة من التطبيق**\n👤 **المستخدم ID:** \`${userToken}\`\n\nالرسالة:\n${msg.text || ''}`;
+
+      try {
+        if (msg.type === 'image' && msg.text) {
+          await bot.sendPhoto(GROUP_CHAT_ID, msg.text, { caption: captionText, parse_mode: 'Markdown' });
+        } else if (msg.type === 'video' && msg.text) {
+          await bot.sendVideo(GROUP_CHAT_ID, msg.text, { caption: captionText, parse_mode: 'Markdown' });
+        } else {
+          await bot.sendMessage(GROUP_CHAT_ID, captionText, { parse_mode: 'Markdown' });
+        }
+        console.log(`✅ تم تحويل رسالة من ${userToken} إلى الجروب`);
+      } catch (err) {
+        console.error("❌ خطأ أثناء الإرسال للجروب:", err.message);
+      }
+    }
+  });
+});
+
+// 2. استماع الردود من التليجرام وتحويلها للتطبيق (Telegram -> Firebase)
 bot.on('message', async (msg) => {
   try {
-    // التحقق من أن الرسالة عبارة عن رد (Reply) على منشور سابق
+    // التأكد من أن الرسالة عبارة عن رد (Reply)
     if (msg.reply_to_message) {
-      const replyCaption = msg.reply_to_message.caption || msg.reply_to_message.text || "";
+      const originalText = msg.reply_to_message.caption || msg.reply_to_message.text || "";
       
-      // البحث عن ID المستخدم (مثال: user_a1b2c3d4) داخل المنشور الأصلي
-      const match = replyCaption.match(/user_[a-zA-Z0-9-]+/);
+      // استخراج الـ ID الخاص بالمستخدم من النص الأصلي للرسالة
+      const match = originalText.match(/user_[a-zA-Z0-9-]+/);
       if (!match) {
-        console.log("⚠️ لم يتم العثور على معرّف المستخدم (userToken) في الرسالة الأصلية.");
+        console.log("⚠️ لم يتم العثور على معرّف userToken في الرسالة المردود عليها!");
         return;
       }
-      
+
       const userToken = match[0];
       const userRef = db.ref(`${userToken}/messages`);
 
-      // 🎥 حالة 1: إذا أرسلت أنت فيديو رداً على المستخدم
+      // إذا كان الرد فيديو
       if (msg.video) {
         const fileId = msg.video.file_id;
         const fileUrl = await bot.getFileLink(fileId);
-        
         await userRef.push({
           text: fileUrl,
           type: 'video',
           isUser: false,
           timestamp: Date.now()
         });
-        console.log(`✅ تم سحب الفيديو وإرساله للمستخدم: ${userToken}`);
+        console.log(`🎥 تم إرسال فيديو إلى ${userToken}`);
       } 
-      // 🖼️ حالة 2: إذا أرسلت صورة
+      // إذا كان الرد صورة
       else if (msg.photo) {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
         const fileUrl = await bot.getFileLink(fileId);
-
         await userRef.push({
           text: fileUrl,
           type: 'image',
           isUser: false,
           timestamp: Date.now()
         });
-        console.log(`✅ تم سحب الصورة وإرسالها للمستخدم: ${userToken}`);
+        console.log(`📸 تم إرسال صورة إلى ${userToken}`);
       } 
-      // 📝 حالة 3: إذا أرسلت نصاً عادياً
+      // إذا كان الرد نص عادي
       else if (msg.text) {
         await userRef.push({
           text: msg.text,
@@ -68,10 +97,10 @@ bot.on('message', async (msg) => {
           isUser: false,
           timestamp: Date.now()
         });
-        console.log(`✅ تم إرسال النص للمستخدم: ${userToken}`);
+        console.log(`✉️ تم إرسال نص إلى ${userToken}`);
       }
     }
   } catch (error) {
-    console.error("❌ حدث خطأ أثناء معالجة الرسالة:", error);
+    console.error("❌ حدث خطأ في معالجة الرد:", error);
   }
 });
