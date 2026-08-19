@@ -11,13 +11,14 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 TOKEN = os.getenv("BOT_TOKEN")
 
 # ضع الآيدي (ID) الخاص بك هنا لكي يرسل لك إشعاراً عندما يدخل شخص جديد للبوت
-# يمكنك معرفة الآيدي الخاص بك عبر بوت @userinfobot في تيليجرام
 ADMIN_ID = 7325566792  # <--- استبدل هذا الرقم برقم الآيدي الحقيقي الخاص بك
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_name = user.first_name
-    user_username = f"@{user.username}" if user.username "ليس له معرف"
+    
+    # تصحيح شرط جلب المعرف بشكل صحيح وسليم برمجياً
+    user_username = f"@{user.username}" if user.username else "ليس له معرف"
     user_id = user.id
 
     # رسالة الترحيب للمستخدم
@@ -27,7 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text)
 
-    # إرسال إشعار لك أنت كمطور أن شخصاً جديداً دخل للبوت (إذا وضعت آيديك الصحيح)
+    # إرسال إشعار لك أنت كمطور أن شخصاً جديداً دخل للبوت
     if ADMIN_ID and ADMIN_ID != 123456789:
         try:
             notification = (
