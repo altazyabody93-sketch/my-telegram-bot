@@ -1,2 +1,6 @@
-python-telegram-bot
-yt-dlp
+pyTelegramBotAPI
+cloudscraper
+requests
+phonenumbers
+beautifulsoup4
+pycountry
