@@ -18,8 +18,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus
 import shutil
 
-BOT_TOKEN ="8651333494:AAHqfzAWBnGu1OvPss10rbV932QFGPj2V5o"
-MAIN_ADMIN_ID = 7325566792
+BOT_TOKEN ="8899073812:AAHg9byFL9l6VaoyfRMajyFHz6gnK1eJGhk"
+MAIN_ADMIN_ID = 7325566792 
 # ── Multilang helper ──────────────────────────────────────────────────────────
 _ML = {
     "not_subscribed": {
