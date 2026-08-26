@@ -20,7 +20,7 @@ import shutil
 from flask import Flask, jsonify
 import sys
 
-BOT_TOKEN ="8651333494:AAHqfzAWBnGu1OvPss10rbV932QFGPj2V5o"
+BOT_TOKEN ="8899073812:AAHg9byFL9l6VaoyfRMajyFHz6gnK1eJGhk"
 MAIN_ADMIN_ID = 7325566792
 # ── Multilang helper ──────────────────────────────────────────────────────────
 _ML = {
