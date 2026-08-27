@@ -814,14 +814,16 @@ AJAX_PATH7 = SETTINGS["proton SMS"]["ajax_path"]
 HTTP_TIMEOUT7 = SETTINGS["proton SMS"]["timeout"]
 CHECK_INTERVAL7 = SETTINGS["proton SMS"]["check_interval"]
 
+ims_settings = SETTINGS.get("IMS", {})
 USERNAME8 = get_first_account("IMS").get("username", "")
 PASSWORD8 = get_first_account("IMS").get("password", "")
-BASE_URL8 = SETTINGS["IMS"]["base_url"]
-LOGIN_PAGE_URL8 = SETTINGS["IMS"]["login_page_url"]
-LOGIN_POST_URL8 = SETTINGS["IMS"]["login_post_url"]
-AJAX_PATH8 = SETTINGS["IMS"]["ajax_path"]
-HTTP_TIMEOUT8 = SETTINGS["IMS"]["timeout"]
-CHECK_INTERVAL8 = SETTINGS["IMS"]["check_interval"]
+BASE_URL8 = ims_settings.get("base_url", "http://ims-sms.com")
+LOGIN_PAGE_URL8 = ims_settings.get("login_page_url", "http://ims-sms.com/login")
+LOGIN_POST_URL8 = ims_settings.get("login_post_url", "http://ims-sms.com/signin")
+AJAX_PATH8 = ims_settings.get("ajax_path", "/agent/res/data_smscdr.php")
+HTTP_TIMEOUT8 = ims_settings.get("timeout", 30)
+CHECK_INTERVAL8 = ims_settings.get("check_interval", 5)
+
 
 USERNAME9 = get_first_account("Roxy SMS").get("username", "")
 PASSWORD9 = get_first_account("Roxy SMS").get("password", "")
@@ -842,14 +844,15 @@ AJAX_PATH11 = SETTINGS["Konekta"]["ajax_path"]
 HTTP_TIMEOUT11 = SETTINGS["Konekta"]["timeout"]
 CHECK_INTERVAL11 = SETTINGS["Konekta"]["check_interval"]
 
+moskano_settings = SETTINGS.get("Moskano", {})
 USERNAME20 = get_first_account("Moskano").get("username", "")
 PASSWORD20 = get_first_account("Moskano").get("password", "")
-BASE_URL20 = SETTINGS["Moskano"]["base_url"]
-LOGIN_PAGE_URL20 = SETTINGS["Moskano"]["login_page_url"]
-LOGIN_POST_URL20 = SETTINGS["Moskano"]["login_post_url"]
-AJAX_PATH20 = SETTINGS["Moskano"]["ajax_path"]
-HTTP_TIMEOUT20 = SETTINGS["Moskano"]["timeout"]
-CHECK_INTERVAL20 = SETTINGS["Moskano"]["check_interval"]
+BASE_URL20 = moskano_settings.get("base_url", "https://moskano.example.com")
+LOGIN_PAGE_URL20 = moskano_settings.get("login_page_url", "https://moskano.example.com/login")
+LOGIN_POST_URL20 = moskano_settings.get("login_post_url", "https://moskano.example.com/signin")
+AJAX_PATH20 = moskano_settings.get("ajax_path", "/agent/res/data_smscdr.php")
+HTTP_TIMEOUT20 = moskano_settings.get("timeout", 30)
+CHECK_INTERVAL20 = moskano_settings.get("check_interval", 5)
 
 
 USERNAME12 = get_first_account("hadi").get("username", "")
