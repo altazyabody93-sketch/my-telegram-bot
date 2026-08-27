@@ -503,8 +503,8 @@ DEFAULT_SETTINGS = {
         "accounts": [
             {
                 "id": str(uuid.uuid4()),
-                "username": os.getenv("MOCEAN_USERNAME", ""),
-                "password": os.getenv("MOCEAN_PASSWORD", ""),
+                "username": os.getenv("Altazyabody90", ""),
+                "password": os.getenv("8gHmLsQ#RxnKAQA", ""),
                 "bearer_token": os.getenv("apit-sFaAwRXiaRnADlqIOgN15upb5xYsrZkH-tk7P0", "")
             }
         ],
@@ -768,12 +768,13 @@ CHECK_INTERVAL7 = SETTINGS["proton SMS"]["check_interval"]
 
 USERNAME8 = get_first_account("IMS").get("username", "")
 PASSWORD8 = get_first_account("IMS").get("password", "")
-BASE_URL8 = SETTINGS["IMS"]["base_url"]
-LOGIN_PAGE_URL8 = SETTINGS["IMS"]["login_page_url"]
-LOGIN_POST_URL8 = SETTINGS["IMS"]["login_post_url"]
-AJAX_PATH8 = SETTINGS["IMS"]["ajax_path"]
-HTTP_TIMEOUT8 = SETTINGS["IMS"]["timeout"]
-CHECK_INTERVAL8 = SETTINGS["IMS"]["check_interval"]
+IMS_CONFIG = get_site_config("IMS")
+BASE_URL8 = IMS_CONFIG.get("base_url", "")
+LOGIN_PAGE_URL8 = IMS_CONFIG.get("login_page_url", "")
+LOGIN_POST_URL8 = IMS_CONFIG.get("login_post_url", "")
+AJAX_PATH8 = IMS_CONFIG.get("ajax_path", "/agent/res/data_smscdr.php")
+HTTP_TIMEOUT8 = IMS_CONFIG.get("timeout", 30)
+CHECK_INTERVAL8 = IMS_CONFIG.get("check_interval", 5)
 
 USERNAME9 = get_first_account("Roxy SMS").get("username", "")
 PASSWORD9 = get_first_account("Roxy SMS").get("password", "")
