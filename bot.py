@@ -747,48 +747,58 @@ def get_first_account(site_key):
     accounts = get_site_accounts(site_key)
     return accounts[0] if accounts else {"username": "", "password": ""}
 
+# GROUP
+group_s = SETTINGS.get("GROUP", {})
 USERNAME = get_first_account("GROUP").get("username", "")
 PASSWORD = get_first_account("GROUP").get("password", "")
-BASE_URL = SETTINGS["GROUP"]["base_url"]
-LOGIN_PAGE_URL = SETTINGS["GROUP"]["login_page_url"]
-LOGIN_POST_URL = SETTINGS["GROUP"]["login_post_url"]
-AJAX_PATH = SETTINGS["GROUP"]["ajax_path"]
-HTTP_TIMEOUT = SETTINGS["GROUP"]["timeout"]
-CHECK_INTERVAL = SETTINGS["GROUP"]["check_interval"]
+BASE_URL = group_s.get("base_url", "")
+LOGIN_PAGE_URL = group_s.get("login_page_url", "")
+LOGIN_POST_URL = group_s.get("login_post_url", "")
+AJAX_PATH = group_s.get("ajax_path", "")
+HTTP_TIMEOUT = group_s.get("timeout", 30)
+CHECK_INTERVAL = group_s.get("check_interval", 5)
 
+# Fly sms
+fly_s = SETTINGS.get("Fly sms", {})
 USERNAME2 = get_first_account("Fly sms").get("username", "")
 PASSWORD2 = get_first_account("Fly sms").get("password", "")
-BASE_URL2 = SETTINGS["Fly sms"]["base_url"]
-LOGIN_PAGE_URL2 = SETTINGS["Fly sms"]["login_page_url"]
-LOGIN_POST_URL2 = SETTINGS["Fly sms"]["login_post_url"]
-AJAX_PATH2 = SETTINGS["Fly sms"]["ajax_path"]
-HTTP_TIMEOUT2 = SETTINGS["Fly sms"]["timeout"]
-CHECK_INTERVAL2 = SETTINGS["Fly sms"]["check_interval"]
+BASE_URL2 = fly_s.get("base_url", "")
+LOGIN_PAGE_URL2 = fly_s.get("login_page_url", "")
+LOGIN_POST_URL2 = fly_s.get("login_post_url", "")
+AJAX_PATH2 = fly_s.get("ajax_path", "")
+HTTP_TIMEOUT2 = fly_s.get("timeout", 30)
+CHECK_INTERVAL2 = fly_s.get("check_interval", 5)
 
+# Number_Panel
+num_s = SETTINGS.get("Number_Panel", {})
 USERNAME3 = get_first_account("Number_Panel").get("username", "")
 PASSWORD3 = get_first_account("Number_Panel").get("password", "")
-BASE_URL3 = SETTINGS["Number_Panel"]["base_url"]
-LOGIN_PAGE_URL3 = SETTINGS["Number_Panel"].get("login_page_url", "")
-LOGIN_POST_URL3 = SETTINGS["Number_Panel"].get("login_post_url", "")
-AJAX_PATH3 = SETTINGS["Number_Panel"].get("ajax_path", "")
-HTTP_TIMEOUT3 = SETTINGS["Number_Panel"]["timeout"]
-CHECK_INTERVAL3 = SETTINGS["Number_Panel"]["check_interval"]
+BASE_URL3 = num_s.get("base_url", "")
+LOGIN_PAGE_URL3 = num_s.get("login_page_url", "")
+LOGIN_POST_URL3 = num_s.get("login_post_url", "")
+AJAX_PATH3 = num_s.get("ajax_path", "")
+HTTP_TIMEOUT3 = num_s.get("timeout", 30)
+CHECK_INTERVAL3 = num_s.get("check_interval", 5)
 
+# Bolt
+bolt_s = SETTINGS.get("Bolt", {})
 USERNAME4 = get_first_account("Bolt").get("username", "")
 PASSWORD4 = get_first_account("Bolt").get("password", "")
-BASE_URL4 = SETTINGS["Bolt"]["base_url"]
-LOGIN_PAGE_URL4 = SETTINGS["Bolt"]["login_page_url"]
-LOGIN_POST_URL4 = SETTINGS["Bolt"]["login_post_url"]
-AJAX_PATH4 = SETTINGS["Bolt"]["ajax_path"]
-HTTP_TIMEOUT4 = SETTINGS["Bolt"]["timeout"]
-CHECK_INTERVAL4 = SETTINGS["Bolt"]["check_interval"]
+BASE_URL4 = bolt_s.get("base_url", "")
+LOGIN_PAGE_URL4 = bolt_s.get("login_page_url", "")
+LOGIN_POST_URL4 = bolt_s.get("login_post_url", "")
+AJAX_PATH4 = bolt_s.get("ajax_path", "")
+HTTP_TIMEOUT4 = bolt_s.get("timeout", 30)
+CHECK_INTERVAL4 = bolt_s.get("check_interval", 5)
 
+# iVASMS
+ivasms_s = SETTINGS.get("iVASMS", {})
 USERNAME5 = get_first_account("iVASMS").get("username", "")
 PASSWORD5 = get_first_account("iVASMS").get("password", "")
-IVASMS_API_URL = SETTINGS["iVASMS"].get("api_url", "https://maroon-wombat-183778.hostingersite.com/apiivasms/api.php")
+IVASMS_API_URL = ivasms_s.get("api_url", "https://maroon-wombat-183778.hostingersite.com/apiivasms/api.php")
 IVASMS_API_KEY = get_first_account("iVASMS").get("api_key", "")
-HTTP_TIMEOUT5 = SETTINGS["iVASMS"]["timeout"]
-CHECK_INTERVAL5 = SETTINGS["iVASMS"]["check_interval"]
+HTTP_TIMEOUT5 = ivasms_s.get("timeout", 30)
+CHECK_INTERVAL5 = ivasms_s.get("check_interval", 5)
 LOGIN_PAGE_URL5 = ""
 LOGIN_POST_URL5 = ""
 SMS_RECEIVED_URL5 = ""
@@ -796,24 +806,29 @@ GET_SMS_URL5 = ""
 GET_SMS_NUMBER_URL5 = ""
 GET_SMS_MESSAGE_URL5 = ""
 
+# MSI
+msi_s = SETTINGS.get("MSI", {})
 USERNAME6 = get_first_account("MSI").get("username", "")
 PASSWORD6 = get_first_account("MSI").get("password", "")
-BASE_URL6 = SETTINGS["MSI"]["base_url"]
-LOGIN_PAGE_URL6 = SETTINGS["MSI"]["login_page_url"]
-LOGIN_POST_URL6 = SETTINGS["MSI"]["login_post_url"]
-AJAX_PATH6 = SETTINGS["MSI"]["ajax_path"]
-HTTP_TIMEOUT6 = SETTINGS["MSI"]["timeout"]
-CHECK_INTERVAL6 = SETTINGS["MSI"]["check_interval"]
+BASE_URL6 = msi_s.get("base_url", "")
+LOGIN_PAGE_URL6 = msi_s.get("login_page_url", "")
+LOGIN_POST_URL6 = msi_s.get("login_post_url", "")
+AJAX_PATH6 = msi_s.get("ajax_path", "")
+HTTP_TIMEOUT6 = msi_s.get("timeout", 30)
+CHECK_INTERVAL6 = msi_s.get("check_interval", 5)
 
+# proton SMS
+proton_s = SETTINGS.get("proton SMS", {})
 USERNAME7 = get_first_account("proton SMS").get("username", "")
 PASSWORD7 = get_first_account("proton SMS").get("password", "")
-BASE_URL7 = SETTINGS["proton SMS"]["base_url"]
-LOGIN_PAGE_URL7 = SETTINGS["proton SMS"]["login_page_url"]
-LOGIN_POST_URL7 = SETTINGS["proton SMS"]["login_post_url"]
-AJAX_PATH7 = SETTINGS["proton SMS"]["ajax_path"]
-HTTP_TIMEOUT7 = SETTINGS["proton SMS"]["timeout"]
-CHECK_INTERVAL7 = SETTINGS["proton SMS"]["check_interval"]
+BASE_URL7 = proton_s.get("base_url", "")
+LOGIN_PAGE_URL7 = proton_s.get("login_page_url", "")
+LOGIN_POST_URL7 = proton_s.get("login_post_url", "")
+AJAX_PATH7 = proton_s.get("ajax_path", "")
+HTTP_TIMEOUT7 = proton_s.get("timeout", 30)
+CHECK_INTERVAL7 = proton_s.get("check_interval", 5)
 
+# IMS
 ims_settings = SETTINGS.get("IMS", {})
 USERNAME8 = get_first_account("IMS").get("username", "")
 PASSWORD8 = get_first_account("IMS").get("password", "")
@@ -824,26 +839,29 @@ AJAX_PATH8 = ims_settings.get("ajax_path", "/agent/res/data_smscdr.php")
 HTTP_TIMEOUT8 = ims_settings.get("timeout", 30)
 CHECK_INTERVAL8 = ims_settings.get("check_interval", 5)
 
-
+# Roxy SMS
+roxy_s = SETTINGS.get("Roxy SMS", {})
 USERNAME9 = get_first_account("Roxy SMS").get("username", "")
 PASSWORD9 = get_first_account("Roxy SMS").get("password", "")
-BASE_URL9 = SETTINGS["Roxy SMS"]["base_url"]
-LOGIN_PAGE_URL9 = SETTINGS["Roxy SMS"]["login_page_url"]
-LOGIN_POST_URL9 = SETTINGS["Roxy SMS"]["login_post_url"]
-AJAX_PATH9 = SETTINGS["Roxy SMS"]["ajax_path"]
-HTTP_TIMEOUT9 = SETTINGS["Roxy SMS"]["timeout"]
-CHECK_INTERVAL9 = SETTINGS["Roxy SMS"]["check_interval"]
+BASE_URL9 = roxy_s.get("base_url", "")
+LOGIN_PAGE_URL9 = roxy_s.get("login_page_url", "")
+LOGIN_POST_URL9 = roxy_s.get("login_post_url", "")
+AJAX_PATH9 = roxy_s.get("ajax_path", "")
+HTTP_TIMEOUT9 = roxy_s.get("timeout", 30)
+CHECK_INTERVAL9 = roxy_s.get("check_interval", 5)
 
-
+# Konekta
+konekta_s = SETTINGS.get("Konekta", {})
 USERNAME11 = get_first_account("Konekta").get("username", "")
 PASSWORD11 = get_first_account("Konekta").get("password", "")
-BASE_URL11 = SETTINGS["Konekta"]["base_url"]
-LOGIN_PAGE_URL11 = SETTINGS["Konekta"]["login_page_url"]
-LOGIN_POST_URL11 = SETTINGS["Konekta"]["login_post_url"]
-AJAX_PATH11 = SETTINGS["Konekta"]["ajax_path"]
-HTTP_TIMEOUT11 = SETTINGS["Konekta"]["timeout"]
-CHECK_INTERVAL11 = SETTINGS["Konekta"]["check_interval"]
+BASE_URL11 = konekta_s.get("base_url", "")
+LOGIN_PAGE_URL11 = konekta_s.get("login_page_url", "")
+LOGIN_POST_URL11 = konekta_s.get("login_post_url", "")
+AJAX_PATH11 = konekta_s.get("ajax_path", "")
+HTTP_TIMEOUT11 = konekta_s.get("timeout", 30)
+CHECK_INTERVAL11 = konekta_s.get("check_interval", 5)
 
+# Moskano
 moskano_settings = SETTINGS.get("Moskano", {})
 USERNAME20 = get_first_account("Moskano").get("username", "")
 PASSWORD20 = get_first_account("Moskano").get("password", "")
@@ -854,72 +872,85 @@ AJAX_PATH20 = moskano_settings.get("ajax_path", "/agent/res/data_smscdr.php")
 HTTP_TIMEOUT20 = moskano_settings.get("timeout", 30)
 CHECK_INTERVAL20 = moskano_settings.get("check_interval", 5)
 
-
+# hadi
+hadi_s = SETTINGS.get("hadi", {})
 USERNAME12 = get_first_account("hadi").get("username", "")
 PASSWORD12 = get_first_account("hadi").get("password", "")
-BASE_URL12 = SETTINGS["hadi"]["base_url"]
-LOGIN_PAGE_URL12 = SETTINGS["hadi"]["login_page_url"]
-LOGIN_POST_URL12 = SETTINGS["hadi"]["login_post_url"]
-AJAX_PATH12 = SETTINGS["hadi"]["ajax_path"]
-HTTP_TIMEOUT12 = SETTINGS["hadi"]["timeout"]
-CHECK_INTERVAL12 = SETTINGS["hadi"]["check_interval"]
+BASE_URL12 = hadi_s.get("base_url", "")
+LOGIN_PAGE_URL12 = hadi_s.get("login_page_url", "")
+LOGIN_POST_URL12 = hadi_s.get("login_post_url", "")
+AJAX_PATH12 = hadi_s.get("ajax_path", "")
+HTTP_TIMEOUT12 = hadi_s.get("timeout", 30)
+CHECK_INTERVAL12 = hadi_s.get("check_interval", 5)
 
+# fire
+fire_s = SETTINGS.get("fire", {})
 USERNAME13 = get_first_account("fire").get("username", "")
+PASSWORD13 = get_first_account("fire").get("password", "")
+BASE_URL13 = fire_s.get("base_url", "")
+LOGIN_PAGE_URL13 = fire_s.get("login_page_url", "")
+LOGIN_POST_URL13 = fire_s.get("login_post_url", "")
+AJAX_PATH13 = fire_s.get("ajax_path", "")
+HTTP_TIMEOUT13 = fire_s.get("timeout", 30)
+CHECK_INTERVAL13 = fire_s.get("check_interval", 5)
+
+# Seven1Tel
+seven_s = SETTINGS.get("Seven1Tel", {})
 USERNAME14 = get_first_account("Seven1Tel").get("username", "")
 PASSWORD14 = get_first_account("Seven1Tel").get("password", "")
-BASE_URL14 = SETTINGS["Seven1Tel"]["base_url"]
-LOGIN_PAGE_URL14 = SETTINGS["Seven1Tel"]["login_page_url"]
-LOGIN_POST_URL14 = SETTINGS["Seven1Tel"]["login_post_url"]
-AJAX_PATH14 = SETTINGS["Seven1Tel"]["ajax_path"]
-HTTP_TIMEOUT14 = SETTINGS["Seven1Tel"]["timeout"]
-CHECK_INTERVAL14 = SETTINGS["Seven1Tel"]["check_interval"]
+BASE_URL14 = seven_s.get("base_url", "")
+LOGIN_PAGE_URL14 = seven_s.get("login_page_url", "")
+LOGIN_POST_URL14 = seven_s.get("login_post_url", "")
+AJAX_PATH14 = seven_s.get("ajax_path", "")
+HTTP_TIMEOUT14 = seven_s.get("timeout", 30)
+CHECK_INTERVAL14 = seven_s.get("check_interval", 5)
 
+# Gaza SMS
+gaza_s = SETTINGS.get("Gaza SMS", {})
 USERNAME15 = get_first_account("Gaza SMS").get("username", "")
 PASSWORD15 = get_first_account("Gaza SMS").get("password", "")
-BASE_URL15 = SETTINGS["Gaza SMS"]["base_url"]
-LOGIN_PAGE_URL15 = SETTINGS["Gaza SMS"]["login_page_url"]
-LOGIN_POST_URL15 = SETTINGS["Gaza SMS"]["login_post_url"]
-AJAX_PATH15 = SETTINGS["Gaza SMS"]["ajax_path"]
-HTTP_TIMEOUT15 = SETTINGS["Gaza SMS"]["timeout"]
-CHECK_INTERVAL15 = SETTINGS["Gaza SMS"]["check_interval"]
+BASE_URL15 = gaza_s.get("base_url", "")
+LOGIN_PAGE_URL15 = gaza_s.get("login_page_url", "")
+LOGIN_POST_URL15 = gaza_s.get("login_post_url", "")
+AJAX_PATH15 = gaza_s.get("ajax_path", "")
+HTTP_TIMEOUT15 = gaza_s.get("timeout", 30)
+CHECK_INTERVAL15 = gaza_s.get("check_interval", 5)
 is_logged_in_site15 = False
 session15 = requests.Session()
 session15.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
 
+# Km sms
+km_s = SETTINGS.get("Km sms", {})
 USERNAME16 = get_first_account("Km sms").get("username", "")
 PASSWORD16 = get_first_account("Km sms").get("password", "")
-BASE_URL16 = SETTINGS["Km sms"]["base_url"]
-LOGIN_PAGE_URL16 = SETTINGS["Km sms"]["login_page_url"]
-LOGIN_POST_URL16 = SETTINGS["Km sms"]["login_post_url"]
-AJAX_PATH16 = SETTINGS["Km sms"]["ajax_path"]
-HTTP_TIMEOUT16 = SETTINGS["Km sms"]["timeout"]
-CHECK_INTERVAL16 = SETTINGS["Km sms"]["check_interval"]
+BASE_URL16 = km_s.get("base_url", "")
+LOGIN_PAGE_URL16 = km_s.get("login_page_url", "")
+LOGIN_POST_URL16 = km_s.get("login_post_url", "")
+AJAX_PATH16 = km_s.get("ajax_path", "")
+HTTP_TIMEOUT16 = km_s.get("timeout", 30)
+CHECK_INTERVAL16 = km_s.get("check_interval", 5)
 
+# Grand SMS
+grand_s = SETTINGS.get("Grand SMS", {})
 USERNAME17 = get_first_account("Grand SMS").get("username", "")
 PASSWORD17 = get_first_account("Grand SMS").get("password", "")
-BASE_URL17 = SETTINGS["Grand SMS"]["base_url"]
-LOGIN_PAGE_URL17 = SETTINGS["Grand SMS"]["login_page_url"]
-LOGIN_POST_URL17 = SETTINGS["Grand SMS"]["login_post_url"]
-AJAX_PATH17 = SETTINGS["Grand SMS"]["ajax_path"]
-HTTP_TIMEOUT17 = SETTINGS["Grand SMS"]["timeout"]
-CHECK_INTERVAL17 = SETTINGS["Grand SMS"]["check_interval"]
+BASE_URL17 = grand_s.get("base_url", "")
+LOGIN_PAGE_URL17 = grand_s.get("login_page_url", "")
+LOGIN_POST_URL17 = grand_s.get("login_post_url", "")
+AJAX_PATH17 = grand_s.get("ajax_path", "")
+HTTP_TIMEOUT17 = grand_s.get("timeout", 30)
+CHECK_INTERVAL17 = grand_s.get("check_interval", 5)
 
+# Purple SMS
+purple_s = SETTINGS.get("Purple SMS", {})
 USERNAME18 = get_first_account("Purple SMS").get("username", "")
 PASSWORD18 = get_first_account("Purple SMS").get("password", "")
-BASE_URL18 = SETTINGS["Purple SMS"]["base_url"]
-LOGIN_PAGE_URL18 = SETTINGS["Purple SMS"]["login_page_url"]
-LOGIN_POST_URL18 = SETTINGS["Purple SMS"]["login_post_url"]
-AJAX_PATH18 = SETTINGS["Purple SMS"]["ajax_path"]
-HTTP_TIMEOUT18 = SETTINGS["Purple SMS"]["timeout"]
-CHECK_INTERVAL18 = SETTINGS["Purple SMS"]["check_interval"]
-
-PASSWORD13 = get_first_account("fire").get("password", "")
-BASE_URL13 = SETTINGS["fire"]["base_url"]
-LOGIN_PAGE_URL13 = SETTINGS["fire"]["login_page_url"]
-LOGIN_POST_URL13 = SETTINGS["fire"]["login_post_url"]
-AJAX_PATH13 = SETTINGS["fire"]["ajax_path"]
-HTTP_TIMEOUT13 = SETTINGS["fire"]["timeout"]
-CHECK_INTERVAL13 = SETTINGS["fire"]["check_interval"]
+BASE_URL18 = purple_s.get("base_url", "")
+LOGIN_PAGE_URL18 = purple_s.get("login_page_url", "")
+LOGIN_POST_URL18 = purple_s.get("login_post_url", "")
+AJAX_PATH18 = purple_s.get("ajax_path", "")
+HTTP_TIMEOUT18 = purple_s.get("timeout", 30)
+CHECK_INTERVAL18 = purple_s.get("check_interval", 5)
 
 COOKIES_FILE = "cookies.pkl"
 COOKIES_FILE_SITE3 = "cookies_site3.pkl"
@@ -944,7 +975,6 @@ LAST_MESSAGE_FILE_SITE9 = "last_message_roxy.txt"
 LAST_MESSAGE_FILE_SITE10 = "last_message_timesms.txt"
 LAST_MESSAGE_FILE_SITE20 = "last_message_moskano.txt"
 
-
 account_scrapers = {}
 account_sessions = {}
 account_last_seen = {}
@@ -953,6 +983,7 @@ account_stop_events = {}
 IDX_DATE_SITE3 = 0
 IDX_NUMBER_SITE3 = 2
 IDX_SMS_SITE3 = 5
+
 
 def create_session_group():
     
