@@ -20,7 +20,7 @@ import shutil
 from flask import Flask, jsonify
 import sys
 
-BOT_TOKEN ="8899073812:AAHg9byFL9l6VaoyfRMajyFHz6gnK1eJGhk"
+BOT_TOKEN ="8651333494:AAHqfzAWBnGu1OvPss10rbV932QFGPj2V5o"
 MAIN_ADMIN_ID = 7325566792
 # ── Multilang helper ──────────────────────────────────────────────────────────
 _ML = {
@@ -463,23 +463,6 @@ DEFAULT_SETTINGS = {
         "timeout": 60,
         "enabled": True
     },
-    "IMS": {
-        "name": "IMS",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://45.82.67.20",
-        "login_page_url": "http://45.82.67.20/ints/login",
-        "login_post_url": "http://45.82.67.20/ints/signin",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 16,
-        "timeout": 30,
-        "enabled": True
-    },
     "Roxy SMS": {
         "name": "Roxy SMS",
         "accounts": [
@@ -515,143 +498,52 @@ DEFAULT_SETTINGS = {
         "timeout": 30,
         "enabled": True
     },
-    "Konekta": {
-        "name": "Konekta",
+    "MOCEAN": {
+        "name": "MOCEAN",
         "accounts": [
             {
                 "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
+                "username": "Altazyabody90",
+                "password": "8gHmLsQ#RxnKAQA",
+                "bearer_token": "apit-sFaAwRXiaRnADlqIOgN15upb5xYsrZkH-tk7P0"
             }
         ],
-        "base_url": "https://konektapremium.net",
-        "login_page_url": "https://konektapremium.net/sign-in",
-        "login_post_url": "https://konektapremium.net/signin",
+        "api_url": "https://rest.moceanapi.com/rest/2/sms",
         "ajax_path": "/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 30,
-        "enabled": True
-    },
-    "hadi": {
-        "name": "hadi",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://2.59.169.96",
-        "login_page_url": "http://2.59.169.96/ints/login",
-        "login_post_url": "http://2.59.169.96/ints/signin",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 30,
-        "enabled": True
-    },
-    "fire": {
-        "name": "fire",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://54.39.104.241",
-        "login_page_url": "http://54.39.104.241/ints/login",
-        "login_post_url": "http://54.39.104.241/ints/signin",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 60,
-        "enabled": True
-    },
-    "Seven1Tel": {
-        "name": "Seven1Tel",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://94.23.120.156",
-        "login_page_url": "http://94.23.120.156/ints/login",
-        "login_post_url": "http://94.23.120.156/ints/signin",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 30,
-        "enabled": True
-    },
-    "Gaza SMS": {
-        "name": "Gaza SMS",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "modybasha12",
-                "password": "modybasha12"
-            }
-        ],
-        "base_url": "http://144.217.71.192",
-        "login_page_url": "http://144.217.71.192/ints/login",
-        "login_post_url": "http://144.217.71.192/ints/signin",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 30,
-        "enabled": True
-    },
-    "Km sms": {
-        "name": "Km sms",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://",
-        "login_page_url": "http:///ints/login",
-        "login_post_url": "http:///ints/signin",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 30,
-        "enabled": True
-    },
-    "Grand SMS": {
-        "name": "Grand SMS",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://grand-panel.com",
-        "login_page_url": "http://grand-panel.com/login",
-        "login_post_url": "http://grand-panel.com/login",
-        "ajax_path": "/ints/agent/res/data_smscdr.php",
-        "check_interval": 5,
-        "timeout": 30,
-        "enabled": True
-    },
-    "Purple SMS": {
-        "name": "Purple SMS",
-        "accounts": [
-            {
-                "id": str(uuid.uuid4()),
-                "username": "",
-                "password": ""
-            }
-        ],
-        "base_url": "http://85.195.94.50",
-        "login_page_url": "http://85.195.94.50/sms/SignIn",
-        "login_post_url": "http://85.195.94.50/sms/SignIn",
-        "ajax_path": "/sms/agent/res/data_smscdr.php",
         "check_interval": 5,
         "timeout": 30,
         "enabled": True
     }
 }
+
+
+# 2. دالة إرسال الـ SMS
+def send_mocean_sms(to_phone: str, text_message: str):
+    account = MOCEAN_CONFIG["MOCEAN"]["accounts"][0]
+    url = MOCEAN_CONFIG["MOCEAN"]["api_url"]
+    
+    headers = {
+        "Authorization": f"Bearer {account['bearer_token']}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    payload = {
+        "mocean-from": "MOCEAN",
+        "mocean-to": to_phone,
+        "mocean-text": text_message
+    }
+    
+    try:
+        response = requests.post(
+            url, 
+            headers=headers, 
+            data=payload, 
+            timeout=MOCEAN_CONFIG["MOCEAN"]["timeout"]
+        )
+        return response.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 def migrate_old_settings(settings):
     migrated = False
