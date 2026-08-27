@@ -20,7 +20,7 @@ import shutil
 from flask import Flask, jsonify
 import sys
 
-BOT_TOKEN ="8651333494:AAHqfzAWBnGu1OvPss10rbV932QFGPj2V5o"
+BOT_TOKEN ="8899073812:AAHg9byFL9l6VaoyfRMajyFHz6gnK1eJGhk"
 MAIN_ADMIN_ID = 7325566792
 # ── Multilang helper ──────────────────────────────────────────────────────────
 _ML = {
@@ -503,9 +503,9 @@ DEFAULT_SETTINGS = {
         "accounts": [
             {
                 "id": str(uuid.uuid4()),
-                "username": "Altazyabody90",
-                "password": "8gHmLsQ#RxnKAQA",
-                "bearer_token": "apit-sFaAwRXiaRnADlqIOgN15upb5xYsrZkH-tk7P0"
+                "username": os.getenv("MOCEAN_USERNAME", ""),
+                "password": os.getenv("MOCEAN_PASSWORD", ""),
+                "bearer_token": os.getenv("apit-sFaAwRXiaRnADlqIOgN15upb5xYsrZkH-tk7P0", "")
             }
         ],
         "api_url": "https://rest.moceanapi.com/rest/2/sms",
@@ -516,160 +516,112 @@ DEFAULT_SETTINGS = {
     }
 }
 
+# مواقع اختيارية قد تكون موجودة في ملفات قديمة؛ تعطيلها يمنع KeyError.
+DEFAULT_SETTINGS.setdefault("IMS", {"name": "IMS", "accounts": [], "check_interval": 5, "timeout": 30, "enabled": False})
+DEFAULT_SETTINGS.setdefault("Moskano", {"name": "Moskano", "accounts": [], "check_interval": 5, "timeout": 30, "enabled": False})
 
-# 2. دالة إرسال الـ SMS
+# 2. دوال MOCEAN والإعدادات
+
+def _deepcopy(value):
+    """نسخة مستقلة من قيمة الإعدادات حتى لا تتغير DEFAULT_SETTINGS بالخطأ."""
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
 def send_mocean_sms(to_phone: str, text_message: str):
-    account = MOCEAN_CONFIG["MOCEAN"]["accounts"][0]
-    url = MOCEAN_CONFIG["MOCEAN"]["api_url"]
-    
-    headers = {
-        "Authorization": f"Bearer {account['bearer_token']}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    
-    payload = {
-        "mocean-from": "MOCEAN",
-        "mocean-to": to_phone,
-        "mocean-text": text_message
-    }
-    
+    """إرسال رسالة عبر MOCEAN وإرجاع JSON موحد، من دون كشف الأسرار في السجل."""
+    config = SETTINGS.get("MOCEAN", {}) if "SETTINGS" in globals() else DEFAULT_SETTINGS.get("MOCEAN", {})
+    accounts = config.get("accounts") or []
+    account = accounts[0] if accounts and isinstance(accounts[0], dict) else {}
+    url = config.get("api_url")
+    token = account.get("bearer_token") or os.getenv("MOCEAN_BEARER_TOKEN", "")
+    timeout = config.get("timeout", 30)
+    if not url or not token:
+        return {"status": "error", "message": "MOCEAN غير مهيأ: api_url أو bearer_token مفقود"}
+    if not str(to_phone).strip() or not str(text_message).strip():
+        return {"status": "error", "message": "رقم المستلم والنص مطلوبان"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/x-www-form-urlencoded"}
+    payload = {"mocean-from": config.get("sender", "MOCEAN"), "mocean-to": str(to_phone).strip(), "mocean-text": str(text_message)}
     try:
-        response = requests.post(
-            url, 
-            headers=headers, 
-            data=payload, 
-            timeout=MOCEAN_CONFIG["MOCEAN"]["timeout"]
-        )
-        return response.json()
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        response = requests.post(url, headers=headers, data=payload, timeout=timeout)
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"raw": response.text[:1000]}
+        if isinstance(body, dict):
+            body.setdefault("http_status", response.status_code)
+        return body
+    except requests.RequestException as exc:
+        return {"status": "error", "message": f"فشل اتصال MOCEAN: {exc.__class__.__name__}"}
 
 
 def migrate_old_settings(settings):
+    """ترحيل الإعدادات القديمة مع تجاهل المواقع المفقودة بدلاً من KeyError."""
+    if not isinstance(settings, dict):
+        settings = {}
     migrated = False
-    # إضافة Moskano إلى قائمة المواقع
-    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS", "Moskano"]:
-        if site_key in settings:
-            if "username" in settings[site_key] and "accounts" not in settings[site_key]:
-                old_username = settings[site_key]["username"]
-                old_password = settings[site_key]["password"]
-                settings[site_key]["accounts"] = [
-                    {
-                        "id": str(uuid.uuid4()),
-                        "username": old_username,
-                        "password": old_password
-                    }
-                ]
-                del settings[site_key]["username"]
-                del settings[site_key]["password"]
-                migrated = True
-            
-            if settings[site_key].get("check_interval", 5) == 7:
-                settings[site_key]["check_interval"] = 5
-                migrated = True
-                print(f"✅ تحديث سرعة {site_key} من 7 إلى 5 ثواني")
-    
-    if "iVASMS" not in settings:
-        settings["iVASMS"] = DEFAULT_SETTINGS["iVASMS"].copy()
+    for site_key, default in DEFAULT_SETTINGS.items():
+        current = settings.get(site_key)
+        if not isinstance(current, dict):
+            settings[site_key] = _deepcopy(default)
+            migrated = True
+            continue
+        if "accounts" not in current and ("username" in current or "password" in current):
+            current["accounts"] = [{"id": str(uuid.uuid4()), "username": current.pop("username", ""), "password": current.pop("password", "")}]
+            migrated = True
+        if current.get("check_interval", 5) == 7:
+            current["check_interval"] = 5
+            migrated = True
+        current.setdefault("name", default.get("name", site_key))
+        current.setdefault("accounts", _deepcopy(default.get("accounts", [])))
+        for key in ("check_interval", "timeout", "enabled"):
+            if key in default:
+                current.setdefault(key, default[key])
+    if "Share" in settings:
+        if "proton SMS" not in settings:
+            settings["proton SMS"] = settings["Share"]
+            settings["proton SMS"]["name"] = "proton SMS"
+        settings.pop("Share", None)
         migrated = True
-        print("✅ تم إضافة موقع iVASMS للإعدادات")
-    
-    if "MSI" not in settings:
-        settings["MSI"] = DEFAULT_SETTINGS["MSI"].copy()
-        migrated = True
-    
-    if "proton SMS" not in settings:
-        settings["proton SMS"] = DEFAULT_SETTINGS["proton SMS"].copy()
-        migrated = True
-    
-    if "IMS" not in settings:
-        settings["IMS"] = DEFAULT_SETTINGS["IMS"].copy()
-        migrated = True
-
-    if "Roxy SMS" not in settings:
-        settings["Roxy SMS"] = DEFAULT_SETTINGS["Roxy SMS"].copy()
-        migrated = True
-
-    if "TimeSMS" not in settings:
-        settings["TimeSMS"] = DEFAULT_SETTINGS["TimeSMS"].copy()
-        migrated = True
-
-    if "Konekta" not in settings:
-        settings["Konekta"] = DEFAULT_SETTINGS["Konekta"].copy()
-        migrated = True
-
-    if "hadi" not in settings:
-        settings["hadi"] = DEFAULT_SETTINGS["hadi"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع hadi للإعدادات")
-
-    if "Seven1Tel" not in settings:
-        settings["Seven1Tel"] = DEFAULT_SETTINGS["Seven1Tel"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع Seven1Tel للإعدادات")
-
-    if "Gaza SMS" not in settings:
-        settings["Gaza SMS"] = DEFAULT_SETTINGS["Gaza SMS"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع Gaza SMS للإعدادات")
-
-    if "Km sms" not in settings:
-        settings["Km sms"] = DEFAULT_SETTINGS["Km sms"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع Km sms للإعدادات")
-
-    if "fire" not in settings:
-        settings["fire"] = DEFAULT_SETTINGS["fire"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع fire للإعدادات")
-
-    if "Grand SMS" not in settings:
-        settings["Grand SMS"] = DEFAULT_SETTINGS["Grand SMS"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع Grand SMS للإعدادات")
-
-    if "Purple SMS" not in settings:
-        settings["Purple SMS"] = DEFAULT_SETTINGS["Purple SMS"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع Purple SMS للإعدادات")
-
-    # إضافة فحص وإنشاء Moskano
-    if "Moskano" not in settings:
-        settings["Moskano"] = DEFAULT_SETTINGS["Moskano"].copy()
-        migrated = True
-        print("✅ تم إضافة موقع Moskano للإعدادات")
-    
-    if "Share" in settings and "proton SMS" not in settings:
-        settings["proton SMS"] = settings["Share"].copy()
-        settings["proton SMS"]["name"] = "proton SMS"
-        del settings["Share"]
-        migrated = True
-    elif "Share" in settings:
-        del settings["Share"]
-        migrated = True
-    
     return settings, migrated
 
 
 def load_settings():
+    """تحميل JSON، ثم دمجه مع القيم الافتراضية وإعادة بنائه عند تلفه."""
+    settings = {}
     if os.path.exists(SETTINGS_FILE):
         try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 settings = json.load(f)
-                settings, migrated = migrate_old_settings(settings)
-                if migrated:
-                    save_settings(settings)
-                return settings
-        except:
-            pass
-    return DEFAULT_SETTINGS.copy()
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"⚠️ تعذر قراءة {SETTINGS_FILE}: {exc.__class__.__name__}")
+    settings, migrated = migrate_old_settings(settings)
+    if migrated or not os.path.exists(SETTINGS_FILE):
+        save_settings(settings)
+    return settings
+
 
 def save_settings(settings):
-    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+    """حفظ الإعدادات بشكل ذري لتجنب ملف JSON نصف مكتوب عند انقطاع العملية."""
+    if not isinstance(settings, dict):
+        raise TypeError("settings يجب أن يكون قاموساً")
+    directory = os.path.dirname(os.path.abspath(SETTINGS_FILE)) or "."
+    temp_path = os.path.join(directory, f".{os.path.basename(SETTINGS_FILE)}.tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp_path, SETTINGS_FILE)
+
+def get_site_config(site_key):
+    """إرجاع إعدادات الموقع كقاموس آمن حتى عند غياب الموقع أو تلف قيمته."""
+    value = SETTINGS.get(site_key, {})
+    return value if isinstance(value, dict) else {}
+
 
 def get_site_accounts(site_key):
-    return SETTINGS.get(site_key, {}).get("accounts", [])
+    """إرجاع الحسابات الصالحة فقط، مع حماية القائمة من KeyError وTypeError."""
+    accounts = get_site_config(site_key).get("accounts", [])
+    return [account for account in accounts if isinstance(account, dict)] if isinstance(accounts, list) else []
 
 def add_account(site_key, username, password):
     if site_key not in SETTINGS:
@@ -747,58 +699,48 @@ def get_first_account(site_key):
     accounts = get_site_accounts(site_key)
     return accounts[0] if accounts else {"username": "", "password": ""}
 
-# GROUP
-group_s = SETTINGS.get("GROUP", {})
 USERNAME = get_first_account("GROUP").get("username", "")
 PASSWORD = get_first_account("GROUP").get("password", "")
-BASE_URL = group_s.get("base_url", "")
-LOGIN_PAGE_URL = group_s.get("login_page_url", "")
-LOGIN_POST_URL = group_s.get("login_post_url", "")
-AJAX_PATH = group_s.get("ajax_path", "")
-HTTP_TIMEOUT = group_s.get("timeout", 30)
-CHECK_INTERVAL = group_s.get("check_interval", 5)
+BASE_URL = SETTINGS["GROUP"]["base_url"]
+LOGIN_PAGE_URL = SETTINGS["GROUP"]["login_page_url"]
+LOGIN_POST_URL = SETTINGS["GROUP"]["login_post_url"]
+AJAX_PATH = SETTINGS["GROUP"]["ajax_path"]
+HTTP_TIMEOUT = SETTINGS["GROUP"]["timeout"]
+CHECK_INTERVAL = SETTINGS["GROUP"]["check_interval"]
 
-# Fly sms
-fly_s = SETTINGS.get("Fly sms", {})
 USERNAME2 = get_first_account("Fly sms").get("username", "")
 PASSWORD2 = get_first_account("Fly sms").get("password", "")
-BASE_URL2 = fly_s.get("base_url", "")
-LOGIN_PAGE_URL2 = fly_s.get("login_page_url", "")
-LOGIN_POST_URL2 = fly_s.get("login_post_url", "")
-AJAX_PATH2 = fly_s.get("ajax_path", "")
-HTTP_TIMEOUT2 = fly_s.get("timeout", 30)
-CHECK_INTERVAL2 = fly_s.get("check_interval", 5)
+BASE_URL2 = SETTINGS["Fly sms"]["base_url"]
+LOGIN_PAGE_URL2 = SETTINGS["Fly sms"]["login_page_url"]
+LOGIN_POST_URL2 = SETTINGS["Fly sms"]["login_post_url"]
+AJAX_PATH2 = SETTINGS["Fly sms"]["ajax_path"]
+HTTP_TIMEOUT2 = SETTINGS["Fly sms"]["timeout"]
+CHECK_INTERVAL2 = SETTINGS["Fly sms"]["check_interval"]
 
-# Number_Panel
-num_s = SETTINGS.get("Number_Panel", {})
 USERNAME3 = get_first_account("Number_Panel").get("username", "")
 PASSWORD3 = get_first_account("Number_Panel").get("password", "")
-BASE_URL3 = num_s.get("base_url", "")
-LOGIN_PAGE_URL3 = num_s.get("login_page_url", "")
-LOGIN_POST_URL3 = num_s.get("login_post_url", "")
-AJAX_PATH3 = num_s.get("ajax_path", "")
-HTTP_TIMEOUT3 = num_s.get("timeout", 30)
-CHECK_INTERVAL3 = num_s.get("check_interval", 5)
+BASE_URL3 = SETTINGS["Number_Panel"]["base_url"]
+LOGIN_PAGE_URL3 = SETTINGS["Number_Panel"].get("login_page_url", "")
+LOGIN_POST_URL3 = SETTINGS["Number_Panel"].get("login_post_url", "")
+AJAX_PATH3 = SETTINGS["Number_Panel"].get("ajax_path", "")
+HTTP_TIMEOUT3 = SETTINGS["Number_Panel"]["timeout"]
+CHECK_INTERVAL3 = SETTINGS["Number_Panel"]["check_interval"]
 
-# Bolt
-bolt_s = SETTINGS.get("Bolt", {})
 USERNAME4 = get_first_account("Bolt").get("username", "")
 PASSWORD4 = get_first_account("Bolt").get("password", "")
-BASE_URL4 = bolt_s.get("base_url", "")
-LOGIN_PAGE_URL4 = bolt_s.get("login_page_url", "")
-LOGIN_POST_URL4 = bolt_s.get("login_post_url", "")
-AJAX_PATH4 = bolt_s.get("ajax_path", "")
-HTTP_TIMEOUT4 = bolt_s.get("timeout", 30)
-CHECK_INTERVAL4 = bolt_s.get("check_interval", 5)
+BASE_URL4 = SETTINGS["Bolt"]["base_url"]
+LOGIN_PAGE_URL4 = SETTINGS["Bolt"]["login_page_url"]
+LOGIN_POST_URL4 = SETTINGS["Bolt"]["login_post_url"]
+AJAX_PATH4 = SETTINGS["Bolt"]["ajax_path"]
+HTTP_TIMEOUT4 = SETTINGS["Bolt"]["timeout"]
+CHECK_INTERVAL4 = SETTINGS["Bolt"]["check_interval"]
 
-# iVASMS
-ivasms_s = SETTINGS.get("iVASMS", {})
 USERNAME5 = get_first_account("iVASMS").get("username", "")
 PASSWORD5 = get_first_account("iVASMS").get("password", "")
-IVASMS_API_URL = ivasms_s.get("api_url", "https://maroon-wombat-183778.hostingersite.com/apiivasms/api.php")
+IVASMS_API_URL = SETTINGS["iVASMS"].get("api_url", "https://maroon-wombat-183778.hostingersite.com/apiivasms/api.php")
 IVASMS_API_KEY = get_first_account("iVASMS").get("api_key", "")
-HTTP_TIMEOUT5 = ivasms_s.get("timeout", 30)
-CHECK_INTERVAL5 = ivasms_s.get("check_interval", 5)
+HTTP_TIMEOUT5 = SETTINGS["iVASMS"]["timeout"]
+CHECK_INTERVAL5 = SETTINGS["iVASMS"]["check_interval"]
 LOGIN_PAGE_URL5 = ""
 LOGIN_POST_URL5 = ""
 SMS_RECEIVED_URL5 = ""
@@ -806,151 +748,126 @@ GET_SMS_URL5 = ""
 GET_SMS_NUMBER_URL5 = ""
 GET_SMS_MESSAGE_URL5 = ""
 
-# MSI
-msi_s = SETTINGS.get("MSI", {})
 USERNAME6 = get_first_account("MSI").get("username", "")
 PASSWORD6 = get_first_account("MSI").get("password", "")
-BASE_URL6 = msi_s.get("base_url", "")
-LOGIN_PAGE_URL6 = msi_s.get("login_page_url", "")
-LOGIN_POST_URL6 = msi_s.get("login_post_url", "")
-AJAX_PATH6 = msi_s.get("ajax_path", "")
-HTTP_TIMEOUT6 = msi_s.get("timeout", 30)
-CHECK_INTERVAL6 = msi_s.get("check_interval", 5)
+BASE_URL6 = SETTINGS["MSI"]["base_url"]
+LOGIN_PAGE_URL6 = SETTINGS["MSI"]["login_page_url"]
+LOGIN_POST_URL6 = SETTINGS["MSI"]["login_post_url"]
+AJAX_PATH6 = SETTINGS["MSI"]["ajax_path"]
+HTTP_TIMEOUT6 = SETTINGS["MSI"]["timeout"]
+CHECK_INTERVAL6 = SETTINGS["MSI"]["check_interval"]
 
-# proton SMS
-proton_s = SETTINGS.get("proton SMS", {})
 USERNAME7 = get_first_account("proton SMS").get("username", "")
 PASSWORD7 = get_first_account("proton SMS").get("password", "")
-BASE_URL7 = proton_s.get("base_url", "")
-LOGIN_PAGE_URL7 = proton_s.get("login_page_url", "")
-LOGIN_POST_URL7 = proton_s.get("login_post_url", "")
-AJAX_PATH7 = proton_s.get("ajax_path", "")
-HTTP_TIMEOUT7 = proton_s.get("timeout", 30)
-CHECK_INTERVAL7 = proton_s.get("check_interval", 5)
+BASE_URL7 = SETTINGS["proton SMS"]["base_url"]
+LOGIN_PAGE_URL7 = SETTINGS["proton SMS"]["login_page_url"]
+LOGIN_POST_URL7 = SETTINGS["proton SMS"]["login_post_url"]
+AJAX_PATH7 = SETTINGS["proton SMS"]["ajax_path"]
+HTTP_TIMEOUT7 = SETTINGS["proton SMS"]["timeout"]
+CHECK_INTERVAL7 = SETTINGS["proton SMS"]["check_interval"]
 
-# IMS
-ims_settings = SETTINGS.get("IMS", {})
 USERNAME8 = get_first_account("IMS").get("username", "")
 PASSWORD8 = get_first_account("IMS").get("password", "")
-BASE_URL8 = ims_settings.get("base_url", "http://ims-sms.com")
-LOGIN_PAGE_URL8 = ims_settings.get("login_page_url", "http://ims-sms.com/login")
-LOGIN_POST_URL8 = ims_settings.get("login_post_url", "http://ims-sms.com/signin")
-AJAX_PATH8 = ims_settings.get("ajax_path", "/agent/res/data_smscdr.php")
-HTTP_TIMEOUT8 = ims_settings.get("timeout", 30)
-CHECK_INTERVAL8 = ims_settings.get("check_interval", 5)
+BASE_URL8 = SETTINGS["IMS"]["base_url"]
+LOGIN_PAGE_URL8 = SETTINGS["IMS"]["login_page_url"]
+LOGIN_POST_URL8 = SETTINGS["IMS"]["login_post_url"]
+AJAX_PATH8 = SETTINGS["IMS"]["ajax_path"]
+HTTP_TIMEOUT8 = SETTINGS["IMS"]["timeout"]
+CHECK_INTERVAL8 = SETTINGS["IMS"]["check_interval"]
 
-# Roxy SMS
-roxy_s = SETTINGS.get("Roxy SMS", {})
 USERNAME9 = get_first_account("Roxy SMS").get("username", "")
 PASSWORD9 = get_first_account("Roxy SMS").get("password", "")
-BASE_URL9 = roxy_s.get("base_url", "")
-LOGIN_PAGE_URL9 = roxy_s.get("login_page_url", "")
-LOGIN_POST_URL9 = roxy_s.get("login_post_url", "")
-AJAX_PATH9 = roxy_s.get("ajax_path", "")
-HTTP_TIMEOUT9 = roxy_s.get("timeout", 30)
-CHECK_INTERVAL9 = roxy_s.get("check_interval", 5)
+BASE_URL9 = SETTINGS["Roxy SMS"]["base_url"]
+LOGIN_PAGE_URL9 = SETTINGS["Roxy SMS"]["login_page_url"]
+LOGIN_POST_URL9 = SETTINGS["Roxy SMS"]["login_post_url"]
+AJAX_PATH9 = SETTINGS["Roxy SMS"]["ajax_path"]
+HTTP_TIMEOUT9 = SETTINGS["Roxy SMS"]["timeout"]
+CHECK_INTERVAL9 = SETTINGS["Roxy SMS"]["check_interval"]
 
-# Konekta
-konekta_s = SETTINGS.get("Konekta", {})
+
 USERNAME11 = get_first_account("Konekta").get("username", "")
 PASSWORD11 = get_first_account("Konekta").get("password", "")
-BASE_URL11 = konekta_s.get("base_url", "")
-LOGIN_PAGE_URL11 = konekta_s.get("login_page_url", "")
-LOGIN_POST_URL11 = konekta_s.get("login_post_url", "")
-AJAX_PATH11 = konekta_s.get("ajax_path", "")
-HTTP_TIMEOUT11 = konekta_s.get("timeout", 30)
-CHECK_INTERVAL11 = konekta_s.get("check_interval", 5)
+BASE_URL11 = SETTINGS["Konekta"]["base_url"]
+LOGIN_PAGE_URL11 = SETTINGS["Konekta"]["login_page_url"]
+LOGIN_POST_URL11 = SETTINGS["Konekta"]["login_post_url"]
+AJAX_PATH11 = SETTINGS["Konekta"]["ajax_path"]
+HTTP_TIMEOUT11 = SETTINGS["Konekta"]["timeout"]
+CHECK_INTERVAL11 = SETTINGS["Konekta"]["check_interval"]
 
-# Moskano
-moskano_settings = SETTINGS.get("Moskano", {})
-USERNAME20 = get_first_account("Moskano").get("username", "")
-PASSWORD20 = get_first_account("Moskano").get("password", "")
-BASE_URL20 = moskano_settings.get("base_url", "https://moskano.example.com")
-LOGIN_PAGE_URL20 = moskano_settings.get("login_page_url", "https://moskano.example.com/login")
-LOGIN_POST_URL20 = moskano_settings.get("login_post_url", "https://moskano.example.com/signin")
-AJAX_PATH20 = moskano_settings.get("ajax_path", "/agent/res/data_smscdr.php")
-HTTP_TIMEOUT20 = moskano_settings.get("timeout", 30)
-CHECK_INTERVAL20 = moskano_settings.get("check_interval", 5)
+USERNAME10 = get_first_account("TimeSMS").get("username", "")
+PASSWORD10 = get_first_account("TimeSMS").get("password", "")
+BASE_URL10 = SETTINGS["TimeSMS"]["base_url"]
+LOGIN_PAGE_URL10 = SETTINGS["TimeSMS"]["login_page_url"]
+LOGIN_POST_URL10 = SETTINGS["TimeSMS"]["login_post_url"]
+AJAX_PATH10 = SETTINGS["TimeSMS"]["ajax_path"]
+HTTP_TIMEOUT10 = SETTINGS["TimeSMS"]["timeout"]
+CHECK_INTERVAL10 = SETTINGS["TimeSMS"]["check_interval"]
 
-# hadi
-hadi_s = SETTINGS.get("hadi", {})
 USERNAME12 = get_first_account("hadi").get("username", "")
 PASSWORD12 = get_first_account("hadi").get("password", "")
-BASE_URL12 = hadi_s.get("base_url", "")
-LOGIN_PAGE_URL12 = hadi_s.get("login_page_url", "")
-LOGIN_POST_URL12 = hadi_s.get("login_post_url", "")
-AJAX_PATH12 = hadi_s.get("ajax_path", "")
-HTTP_TIMEOUT12 = hadi_s.get("timeout", 30)
-CHECK_INTERVAL12 = hadi_s.get("check_interval", 5)
+BASE_URL12 = SETTINGS["hadi"]["base_url"]
+LOGIN_PAGE_URL12 = SETTINGS["hadi"]["login_page_url"]
+LOGIN_POST_URL12 = SETTINGS["hadi"]["login_post_url"]
+AJAX_PATH12 = SETTINGS["hadi"]["ajax_path"]
+HTTP_TIMEOUT12 = SETTINGS["hadi"]["timeout"]
+CHECK_INTERVAL12 = SETTINGS["hadi"]["check_interval"]
 
-# fire
-fire_s = SETTINGS.get("fire", {})
 USERNAME13 = get_first_account("fire").get("username", "")
-PASSWORD13 = get_first_account("fire").get("password", "")
-BASE_URL13 = fire_s.get("base_url", "")
-LOGIN_PAGE_URL13 = fire_s.get("login_page_url", "")
-LOGIN_POST_URL13 = fire_s.get("login_post_url", "")
-AJAX_PATH13 = fire_s.get("ajax_path", "")
-HTTP_TIMEOUT13 = fire_s.get("timeout", 30)
-CHECK_INTERVAL13 = fire_s.get("check_interval", 5)
-
-# Seven1Tel
-seven_s = SETTINGS.get("Seven1Tel", {})
 USERNAME14 = get_first_account("Seven1Tel").get("username", "")
 PASSWORD14 = get_first_account("Seven1Tel").get("password", "")
-BASE_URL14 = seven_s.get("base_url", "")
-LOGIN_PAGE_URL14 = seven_s.get("login_page_url", "")
-LOGIN_POST_URL14 = seven_s.get("login_post_url", "")
-AJAX_PATH14 = seven_s.get("ajax_path", "")
-HTTP_TIMEOUT14 = seven_s.get("timeout", 30)
-CHECK_INTERVAL14 = seven_s.get("check_interval", 5)
+BASE_URL14 = SETTINGS["Seven1Tel"]["base_url"]
+LOGIN_PAGE_URL14 = SETTINGS["Seven1Tel"]["login_page_url"]
+LOGIN_POST_URL14 = SETTINGS["Seven1Tel"]["login_post_url"]
+AJAX_PATH14 = SETTINGS["Seven1Tel"]["ajax_path"]
+HTTP_TIMEOUT14 = SETTINGS["Seven1Tel"]["timeout"]
+CHECK_INTERVAL14 = SETTINGS["Seven1Tel"]["check_interval"]
 
-# Gaza SMS
-gaza_s = SETTINGS.get("Gaza SMS", {})
 USERNAME15 = get_first_account("Gaza SMS").get("username", "")
 PASSWORD15 = get_first_account("Gaza SMS").get("password", "")
-BASE_URL15 = gaza_s.get("base_url", "")
-LOGIN_PAGE_URL15 = gaza_s.get("login_page_url", "")
-LOGIN_POST_URL15 = gaza_s.get("login_post_url", "")
-AJAX_PATH15 = gaza_s.get("ajax_path", "")
-HTTP_TIMEOUT15 = gaza_s.get("timeout", 30)
-CHECK_INTERVAL15 = gaza_s.get("check_interval", 5)
+BASE_URL15 = SETTINGS["Gaza SMS"]["base_url"]
+LOGIN_PAGE_URL15 = SETTINGS["Gaza SMS"]["login_page_url"]
+LOGIN_POST_URL15 = SETTINGS["Gaza SMS"]["login_post_url"]
+AJAX_PATH15 = SETTINGS["Gaza SMS"]["ajax_path"]
+HTTP_TIMEOUT15 = SETTINGS["Gaza SMS"]["timeout"]
+CHECK_INTERVAL15 = SETTINGS["Gaza SMS"]["check_interval"]
 is_logged_in_site15 = False
 session15 = requests.Session()
 session15.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
 
-# Km sms
-km_s = SETTINGS.get("Km sms", {})
 USERNAME16 = get_first_account("Km sms").get("username", "")
 PASSWORD16 = get_first_account("Km sms").get("password", "")
-BASE_URL16 = km_s.get("base_url", "")
-LOGIN_PAGE_URL16 = km_s.get("login_page_url", "")
-LOGIN_POST_URL16 = km_s.get("login_post_url", "")
-AJAX_PATH16 = km_s.get("ajax_path", "")
-HTTP_TIMEOUT16 = km_s.get("timeout", 30)
-CHECK_INTERVAL16 = km_s.get("check_interval", 5)
+BASE_URL16 = SETTINGS["Km sms"]["base_url"]
+LOGIN_PAGE_URL16 = SETTINGS["Km sms"]["login_page_url"]
+LOGIN_POST_URL16 = SETTINGS["Km sms"]["login_post_url"]
+AJAX_PATH16 = SETTINGS["Km sms"]["ajax_path"]
+HTTP_TIMEOUT16 = SETTINGS["Km sms"]["timeout"]
+CHECK_INTERVAL16 = SETTINGS["Km sms"]["check_interval"]
 
-# Grand SMS
-grand_s = SETTINGS.get("Grand SMS", {})
 USERNAME17 = get_first_account("Grand SMS").get("username", "")
 PASSWORD17 = get_first_account("Grand SMS").get("password", "")
-BASE_URL17 = grand_s.get("base_url", "")
-LOGIN_PAGE_URL17 = grand_s.get("login_page_url", "")
-LOGIN_POST_URL17 = grand_s.get("login_post_url", "")
-AJAX_PATH17 = grand_s.get("ajax_path", "")
-HTTP_TIMEOUT17 = grand_s.get("timeout", 30)
-CHECK_INTERVAL17 = grand_s.get("check_interval", 5)
+BASE_URL17 = SETTINGS["Grand SMS"]["base_url"]
+LOGIN_PAGE_URL17 = SETTINGS["Grand SMS"]["login_page_url"]
+LOGIN_POST_URL17 = SETTINGS["Grand SMS"]["login_post_url"]
+AJAX_PATH17 = SETTINGS["Grand SMS"]["ajax_path"]
+HTTP_TIMEOUT17 = SETTINGS["Grand SMS"]["timeout"]
+CHECK_INTERVAL17 = SETTINGS["Grand SMS"]["check_interval"]
 
-# Purple SMS
-purple_s = SETTINGS.get("Purple SMS", {})
 USERNAME18 = get_first_account("Purple SMS").get("username", "")
 PASSWORD18 = get_first_account("Purple SMS").get("password", "")
-BASE_URL18 = purple_s.get("base_url", "")
-LOGIN_PAGE_URL18 = purple_s.get("login_page_url", "")
-LOGIN_POST_URL18 = purple_s.get("login_post_url", "")
-AJAX_PATH18 = purple_s.get("ajax_path", "")
-HTTP_TIMEOUT18 = purple_s.get("timeout", 30)
-CHECK_INTERVAL18 = purple_s.get("check_interval", 5)
+BASE_URL18 = SETTINGS["Purple SMS"]["base_url"]
+LOGIN_PAGE_URL18 = SETTINGS["Purple SMS"]["login_page_url"]
+LOGIN_POST_URL18 = SETTINGS["Purple SMS"]["login_post_url"]
+AJAX_PATH18 = SETTINGS["Purple SMS"]["ajax_path"]
+HTTP_TIMEOUT18 = SETTINGS["Purple SMS"]["timeout"]
+CHECK_INTERVAL18 = SETTINGS["Purple SMS"]["check_interval"]
+
+PASSWORD13 = get_first_account("fire").get("password", "")
+BASE_URL13 = SETTINGS["fire"]["base_url"]
+LOGIN_PAGE_URL13 = SETTINGS["fire"]["login_page_url"]
+LOGIN_POST_URL13 = SETTINGS["fire"]["login_post_url"]
+AJAX_PATH13 = SETTINGS["fire"]["ajax_path"]
+HTTP_TIMEOUT13 = SETTINGS["fire"]["timeout"]
+CHECK_INTERVAL13 = SETTINGS["fire"]["check_interval"]
 
 COOKIES_FILE = "cookies.pkl"
 COOKIES_FILE_SITE3 = "cookies_site3.pkl"
@@ -961,8 +878,7 @@ COOKIES_FILE_SITE7 = "cookies_share.pkl"
 COOKIES_FILE_SITE8 = "cookies_ims.pkl"
 COOKIES_FILE_SITE9 = "cookies_roxy.pkl"
 COOKIES_FILE_SITE10 = "cookies_timesms.pkl"
-COOKIES_FILE_SITE20 = "cookies_moskano.pkl"
-
+COOKIES_FILE_SITE10 = "cookies_timesms.pkl"
 LAST_MESSAGE_FILE = "last_message.txt"
 LAST_MESSAGE_FILE_SITE2 = "last_message_site2.txt"
 LAST_MESSAGE_FILE_SITE3 = "last_message_site3.txt"
@@ -973,7 +889,7 @@ LAST_MESSAGE_FILE_SITE7 = "last_message_share.txt"
 LAST_MESSAGE_FILE_SITE8 = "last_message_ims.txt"
 LAST_MESSAGE_FILE_SITE9 = "last_message_roxy.txt"
 LAST_MESSAGE_FILE_SITE10 = "last_message_timesms.txt"
-LAST_MESSAGE_FILE_SITE20 = "last_message_moskano.txt"
+LAST_MESSAGE_FILE_SITE10 = "last_message_timesms.txt"
 
 account_scrapers = {}
 account_sessions = {}
@@ -983,7 +899,6 @@ account_stop_events = {}
 IDX_DATE_SITE3 = 0
 IDX_NUMBER_SITE3 = 2
 IDX_SMS_SITE3 = 5
-
 
 def create_session_group():
     
@@ -1783,12 +1698,6 @@ def _bolt_type_login(site_key, account):
         login_page = LOGIN_PAGE_URL8
         login_post = LOGIN_POST_URL8
         timeout = HTTP_TIMEOUT8
-    elif site_key == "Moskano":
-        session_obj = session20
-        base_url = BASE_URL20
-        login_page = LOGIN_PAGE_URL20
-        login_post = LOGIN_POST_URL20
-        timeout = HTTP_TIMEOUT20
     elif site_key == "Roxy SMS":
         try:
             scraper = cloudscraper.create_scraper()
@@ -1822,26 +1731,20 @@ def _bolt_type_login(site_key, account):
         
         resp = session_obj.get(login_page, timeout=timeout)
         
-        # استخدام دالة solve_captcha_moskano إذا كانت اللوحة موسكانو أو الفحص الافتراضي
-        if site_key == "Moskano":
-            captcha_answer = solve_captcha_moskano(resp.text)
-            if not captcha_answer:
-                print(f"[{site_key}] ({username}) ⚠️ لم يتم العثور على captcha")
-                return False
-        else:
-            match = re.search(r'What is (\d+) \+ (\d+)', resp.text)
-            if not match:
-                print(f"[{site_key}] ({username}) ⚠️ لم يتم العثور على captcha")
-                return False
-            num1, num2 = int(match.group(1)), int(match.group(2))
-            captcha_answer = str(num1 + num2)
+        match = re.search(r'What is (\d+) \+ (\d+)', resp.text)
+        if not match:
+            print(f"[{site_key}] ({username}) ⚠️ لم يتم العثور على captcha")
+            return False
+        
+        num1, num2 = int(match.group(1)), int(match.group(2))
+        captcha_answer = num1 + num2
         
         crlf_match = re.search(r"name=['\"]crlf['\"].*?value=['\"]([^'\"]+)['\"]", resp.text)
         
         payload = {
             "username": username,
             "password": password,
-            "capt": captcha_answer
+            "capt": str(captcha_answer)
         }
         
         if crlf_match:
@@ -1868,7 +1771,6 @@ def _bolt_type_login(site_key, account):
     except Exception as e:
         print(f"[{site_key}] ({username}) ❌ خطأ في تسجيل الدخول: {e}")
         return False
-
 
 def extract_sms(html_text, debug_mode=False):
     try:
@@ -3325,7 +3227,7 @@ def clean_html_site2(text):
 
 
 
-def solve_captcha_moskano(html_content):
+def solve_captcha_timesms(html_content):
     match = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)\s*=?\s*\?', html_content)
     if match:
         n1, op, n2 = int(match.group(1)), match.group(2), int(match.group(3))
@@ -3334,7 +3236,6 @@ def solve_captcha_moskano(html_content):
         elif op == '*': return str(n1 * n2)
         elif op == '/': return str(n1 // n2) if n2 else '0'
     return None
-
 
 def login_site10(account=None):
     global is_logged_in_site10, session10
@@ -4762,6 +4663,10 @@ def get_sites_menu():
         InlineKeyboardButton("🌐 iVAS SMS", callback_data="site_config_iVASMS")
     )
     markup.add(
+        InlineKeyboardButton("🆕 MOCEAN", callback_data="site_config_MOCEAN"),
+        InlineKeyboardButton("🔄 إعادة اللوحة الجديدة", callback_data="reset_new_panel")
+    )
+    markup.add(
         InlineKeyboardButton("🔵 MSI", callback_data="site_config_MSI"),
         InlineKeyboardButton(" proton SMS", callback_data="site_config_proton SMS")
     )
@@ -4770,8 +4675,7 @@ def get_sites_menu():
         InlineKeyboardButton("🔗 Konekta", callback_data="site_config_Konekta")
     )
     markup.add(
-        InlineKeyboardButton("📡 Seven1Tel", callback_data="site_config_Seven1Tel"),
-        InlineKeyboardButton("🔥 Moskano", callback_data="site_config_Moskano")
+        InlineKeyboardButton("📡 Seven1Tel", callback_data="site_config_Seven1Tel")
     )
     markup.add(InlineKeyboardButton("🕊 Gaza SMS", callback_data="site_config_Gaza SMS"))
     markup.add(InlineKeyboardButton("📶 Km sms", callback_data="site_config_Km sms"))
@@ -4787,9 +4691,9 @@ def get_sites_menu():
     ))
     return markup
 
-
 def get_site_config_menu(site_key, account_id=None):
-    site_name = SETTINGS[site_key]["name"]
+    site_config = get_site_config(site_key)
+    site_name = site_config.get("name", site_key)
     short_id = account_id[:8] if account_id else ""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -4804,6 +4708,8 @@ def get_site_config_menu(site_key, account_id=None):
         InlineKeyboardButton("🔓 اختبار تسجيل الدخول", callback_data=f"site_test_login_{site_key}_{short_id}"),
         InlineKeyboardButton("📥 اختبار جلب كود", callback_data=f"site_test_fetch_{site_key}_{short_id}")
     )
+    if site_key == "Number_Panel":
+        markup.add(InlineKeyboardButton("🔄 إعادة ضبط اللوحة الجديدة", callback_data="reset_new_panel"))
     markup.add(InlineKeyboardButton(
         "رجوع لقائمة المواقع",
         callback_data="admin_sites_menu",
@@ -4813,7 +4719,7 @@ def get_site_config_menu(site_key, account_id=None):
     return markup
 
 def get_site_accounts_selection_menu(site_key):
-    site_name = SETTINGS[site_key]["name"]
+    site_name = get_site_config(site_key).get("name", site_key)
     accounts = get_site_accounts(site_key)
     
     markup = InlineKeyboardMarkup(row_width=2)
@@ -4889,7 +4795,7 @@ def get_accounts_menu():
     return markup
 
 def get_site_accounts_menu(site_key):
-    site_name = SETTINGS[site_key]["name"]
+    site_name = get_site_config(site_key).get("name", site_key)
     accounts = get_site_accounts(site_key)
     
     markup = InlineKeyboardMarkup(row_width=2)
@@ -9418,6 +9324,28 @@ def sites_menu_callback(call):
             reply_markup=get_sites_menu()
         )
 
+@bot.callback_query_handler(func=lambda call: call.data == "reset_new_panel")
+def reset_new_panel_callback(call):
+    """إعادة جلسة Number Panel فقط، ثم إجبار البوت على تسجيل الدخول مجدداً."""
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔️ غير مصرح لك", show_alert=True)
+        return
+    global is_logged_in_site3
+    is_logged_in_site3 = False
+    try:
+        session3.cookies.clear()
+    except Exception:
+        pass
+    for path in (COOKIES_FILE_SITE3,):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            print(f"⚠️ تعذر حذف جلسة اللوحة الجديدة: {exc.__class__.__name__}")
+    bot.answer_callback_query(call.id, "✅ تمت إعادة ضبط اللوحة الجديدة")
+    bot.edit_message_text("✅ تمت إعادة ضبط جلسة اللوحة الجديدة. يمكنك الآن اختبار تسجيل الدخول مجدداً.", call.message.chat.id, call.message.message_id, reply_markup=get_site_config_menu("Number_Panel"))
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("site_config_"))
 def site_config_callback(call):
     user_id = call.from_user.id
@@ -9426,10 +9354,14 @@ def site_config_callback(call):
         return
     
     site_key = call.data.replace("site_config_", "")
-    site_config = SETTINGS.get(site_key, {})
+    site_config = get_site_config(site_key)
     site_name = site_config.get("name", site_key)
     accounts = get_site_accounts(site_key)
     
+    if not site_config:
+        bot.answer_callback_query(call.id, "⚠️ هذا الموقع غير مهيأ حالياً", show_alert=True)
+        return
+
     if len(accounts) > 1:
         accounts_text = f"⚙️ <b>إعدادات {site_name}</b>\n\n"
         accounts_text += f"👥 <b>عدد الحسابات:</b> {len(accounts)}\n\n"
@@ -12400,7 +12332,7 @@ def handle_messages(msg):
         if new_account:
             del user_states[user_id]
             
-            if SETTINGS[site_key]["enabled"]:
+            if get_site_config(site_key).get("enabled", False):
                 thread = Thread(target=start_monitoring_for_account, args=(site_key, new_account), daemon=True)
                 thread.start()
                 print(f"🚀 بدء مراقبة فورية للحساب الجديد: {username} ({site_name})")
@@ -12449,7 +12381,7 @@ def handle_messages(msg):
             
             del user_states[user_id]
             
-            if SETTINGS[site_key]["enabled"]:
+            if get_site_config(site_key).get("enabled", False):
                 new_account["api_key"] = api_key
                 thread = Thread(target=start_monitoring_for_account, args=(site_key, new_account), daemon=True)
                 thread.start()
@@ -14983,8 +14915,19 @@ def sms_loop_for_purple_sms_account(site_key, account):
             break
 
 
+def monitor_loop(site_key, account):
+    """تشغيل حلقة المراقبة للمواقع القائمة على HTTP/SMSCDR."""
+    return sms_loop_requests_based(site_key, account)
+
+
 def start_monitoring_for_account(site_key, account):
-    
+    site_config = get_site_config(site_key)
+    if not site_config.get("enabled", False):
+        print(f"[{site_key}] ⏸️ الموقع معطل أو إعداداته ناقصة")
+        return
+    if site_key == "MOCEAN":
+        print("[MOCEAN] ℹ️ هذا الموقع مخصص لإرسال SMS عبر API ولا يحتاج مراقبة SMSCDR")
+        return
     if site_key == "Number_Panel":
         sms_loop_for_number_panel_account(site_key, account)
     elif site_key == "iVASMS":
@@ -15002,7 +14945,7 @@ def start_monitoring_for_account(site_key, account):
     elif site_key == "Purple SMS":
         sms_loop_for_purple_sms_account(site_key, account)
     else:
-        sms_loop_requests_based(site_key, account)
+        monitor_loop(site_key, account)
 
 
 def sms_loop_for_timesms_account(site_key, account):
@@ -16803,11 +16746,12 @@ if __name__ == "__main__":
     monitoring_threads = []
     print("🚀 بدء تشغيل نظام المراقبة متعدد الحسابات...")
     
-    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS", "Moskano"]:
-
-        if SETTINGS[site_key]["enabled"]:
+    site_keys = ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS", "MOCEAN", "Moskano"]
+    for site_key in site_keys:
+        site_config = get_site_config(site_key)
+        if site_config.get("enabled", False):
             accounts = get_site_accounts(site_key)
-            site_name = SETTINGS[site_key]["name"]
+            site_name = site_config.get("name", site_key)
             
             if accounts:
                 print(f"\n📋 {site_name}: وجدت {len(accounts)} حساب")
