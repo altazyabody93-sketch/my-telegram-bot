@@ -547,7 +547,8 @@ def send_mocean_sms(to_phone: str, text_message: str):
 
 def migrate_old_settings(settings):
     migrated = False
-    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS"]:
+    # إضافة Moskano إلى قائمة المواقع
+    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS", "Moskano"]:
         if site_key in settings:
             if "username" in settings[site_key] and "accounts" not in settings[site_key]:
                 old_username = settings[site_key]["username"]
@@ -604,11 +605,13 @@ def migrate_old_settings(settings):
 
     if "Seven1Tel" not in settings:
         settings["Seven1Tel"] = DEFAULT_SETTINGS["Seven1Tel"].copy()
-    if "Gaza SMS" not in settings:
-        settings["Gaza SMS"] = DEFAULT_SETTINGS["Gaza SMS"].copy()
-        print("✅ تم إضافة موقع Gaza SMS للإعدادات")
         migrated = True
         print("✅ تم إضافة موقع Seven1Tel للإعدادات")
+
+    if "Gaza SMS" not in settings:
+        settings["Gaza SMS"] = DEFAULT_SETTINGS["Gaza SMS"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع Gaza SMS للإعدادات")
 
     if "Km sms" not in settings:
         settings["Km sms"] = DEFAULT_SETTINGS["Km sms"].copy()
@@ -629,6 +632,12 @@ def migrate_old_settings(settings):
         settings["Purple SMS"] = DEFAULT_SETTINGS["Purple SMS"].copy()
         migrated = True
         print("✅ تم إضافة موقع Purple SMS للإعدادات")
+
+    # إضافة فحص وإنشاء Moskano
+    if "Moskano" not in settings:
+        settings["Moskano"] = DEFAULT_SETTINGS["Moskano"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع Moskano للإعدادات")
     
     if "Share" in settings and "proton SMS" not in settings:
         settings["proton SMS"] = settings["Share"].copy()
@@ -640,6 +649,7 @@ def migrate_old_settings(settings):
         migrated = True
     
     return settings, migrated
+
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -832,14 +842,15 @@ AJAX_PATH11 = SETTINGS["Konekta"]["ajax_path"]
 HTTP_TIMEOUT11 = SETTINGS["Konekta"]["timeout"]
 CHECK_INTERVAL11 = SETTINGS["Konekta"]["check_interval"]
 
-USERNAME10 = get_first_account("TimeSMS").get("username", "")
-PASSWORD10 = get_first_account("TimeSMS").get("password", "")
-BASE_URL10 = SETTINGS["TimeSMS"]["base_url"]
-LOGIN_PAGE_URL10 = SETTINGS["TimeSMS"]["login_page_url"]
-LOGIN_POST_URL10 = SETTINGS["TimeSMS"]["login_post_url"]
-AJAX_PATH10 = SETTINGS["TimeSMS"]["ajax_path"]
-HTTP_TIMEOUT10 = SETTINGS["TimeSMS"]["timeout"]
-CHECK_INTERVAL10 = SETTINGS["TimeSMS"]["check_interval"]
+USERNAME20 = get_first_account("Moskano").get("username", "")
+PASSWORD20 = get_first_account("Moskano").get("password", "")
+BASE_URL20 = SETTINGS["Moskano"]["base_url"]
+LOGIN_PAGE_URL20 = SETTINGS["Moskano"]["login_page_url"]
+LOGIN_POST_URL20 = SETTINGS["Moskano"]["login_post_url"]
+AJAX_PATH20 = SETTINGS["Moskano"]["ajax_path"]
+HTTP_TIMEOUT20 = SETTINGS["Moskano"]["timeout"]
+CHECK_INTERVAL20 = SETTINGS["Moskano"]["check_interval"]
+
 
 USERNAME12 = get_first_account("hadi").get("username", "")
 PASSWORD12 = get_first_account("hadi").get("password", "")
@@ -916,7 +927,8 @@ COOKIES_FILE_SITE7 = "cookies_share.pkl"
 COOKIES_FILE_SITE8 = "cookies_ims.pkl"
 COOKIES_FILE_SITE9 = "cookies_roxy.pkl"
 COOKIES_FILE_SITE10 = "cookies_timesms.pkl"
-COOKIES_FILE_SITE10 = "cookies_timesms.pkl"
+COOKIES_FILE_SITE20 = "cookies_moskano.pkl"
+
 LAST_MESSAGE_FILE = "last_message.txt"
 LAST_MESSAGE_FILE_SITE2 = "last_message_site2.txt"
 LAST_MESSAGE_FILE_SITE3 = "last_message_site3.txt"
@@ -927,7 +939,8 @@ LAST_MESSAGE_FILE_SITE7 = "last_message_share.txt"
 LAST_MESSAGE_FILE_SITE8 = "last_message_ims.txt"
 LAST_MESSAGE_FILE_SITE9 = "last_message_roxy.txt"
 LAST_MESSAGE_FILE_SITE10 = "last_message_timesms.txt"
-LAST_MESSAGE_FILE_SITE10 = "last_message_timesms.txt"
+LAST_MESSAGE_FILE_SITE20 = "last_message_moskano.txt"
+
 
 account_scrapers = {}
 account_sessions = {}
@@ -1736,6 +1749,12 @@ def _bolt_type_login(site_key, account):
         login_page = LOGIN_PAGE_URL8
         login_post = LOGIN_POST_URL8
         timeout = HTTP_TIMEOUT8
+    elif site_key == "Moskano":
+        session_obj = session20
+        base_url = BASE_URL20
+        login_page = LOGIN_PAGE_URL20
+        login_post = LOGIN_POST_URL20
+        timeout = HTTP_TIMEOUT20
     elif site_key == "Roxy SMS":
         try:
             scraper = cloudscraper.create_scraper()
@@ -1769,20 +1788,26 @@ def _bolt_type_login(site_key, account):
         
         resp = session_obj.get(login_page, timeout=timeout)
         
-        match = re.search(r'What is (\d+) \+ (\d+)', resp.text)
-        if not match:
-            print(f"[{site_key}] ({username}) ⚠️ لم يتم العثور على captcha")
-            return False
-        
-        num1, num2 = int(match.group(1)), int(match.group(2))
-        captcha_answer = num1 + num2
+        # استخدام دالة solve_captcha_moskano إذا كانت اللوحة موسكانو أو الفحص الافتراضي
+        if site_key == "Moskano":
+            captcha_answer = solve_captcha_moskano(resp.text)
+            if not captcha_answer:
+                print(f"[{site_key}] ({username}) ⚠️ لم يتم العثور على captcha")
+                return False
+        else:
+            match = re.search(r'What is (\d+) \+ (\d+)', resp.text)
+            if not match:
+                print(f"[{site_key}] ({username}) ⚠️ لم يتم العثور على captcha")
+                return False
+            num1, num2 = int(match.group(1)), int(match.group(2))
+            captcha_answer = str(num1 + num2)
         
         crlf_match = re.search(r"name=['\"]crlf['\"].*?value=['\"]([^'\"]+)['\"]", resp.text)
         
         payload = {
             "username": username,
             "password": password,
-            "capt": str(captcha_answer)
+            "capt": captcha_answer
         }
         
         if crlf_match:
@@ -1809,6 +1834,7 @@ def _bolt_type_login(site_key, account):
     except Exception as e:
         print(f"[{site_key}] ({username}) ❌ خطأ في تسجيل الدخول: {e}")
         return False
+
 
 def extract_sms(html_text, debug_mode=False):
     try:
@@ -3265,7 +3291,7 @@ def clean_html_site2(text):
 
 
 
-def solve_captcha_timesms(html_content):
+def solve_captcha_moskano(html_content):
     match = re.search(r'(\d+)\s*([+\-*/])\s*(\d+)\s*=?\s*\?', html_content)
     if match:
         n1, op, n2 = int(match.group(1)), match.group(2), int(match.group(3))
@@ -3274,6 +3300,7 @@ def solve_captcha_timesms(html_content):
         elif op == '*': return str(n1 * n2)
         elif op == '/': return str(n1 // n2) if n2 else '0'
     return None
+
 
 def login_site10(account=None):
     global is_logged_in_site10, session10
@@ -4709,7 +4736,8 @@ def get_sites_menu():
         InlineKeyboardButton("🔗 Konekta", callback_data="site_config_Konekta")
     )
     markup.add(
-        InlineKeyboardButton("📡 Seven1Tel", callback_data="site_config_Seven1Tel")
+        InlineKeyboardButton("📡 Seven1Tel", callback_data="site_config_Seven1Tel"),
+        InlineKeyboardButton("🔥 Moskano", callback_data="site_config_Moskano")
     )
     markup.add(InlineKeyboardButton("🕊 Gaza SMS", callback_data="site_config_Gaza SMS"))
     markup.add(InlineKeyboardButton("📶 Km sms", callback_data="site_config_Km sms"))
@@ -4724,6 +4752,7 @@ def get_sites_menu():
         style="primary"
     ))
     return markup
+
 
 def get_site_config_menu(site_key, account_id=None):
     site_name = SETTINGS[site_key]["name"]
@@ -16740,7 +16769,8 @@ if __name__ == "__main__":
     monitoring_threads = []
     print("🚀 بدء تشغيل نظام المراقبة متعدد الحسابات...")
     
-    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS"]:
+    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS", "Moskano"]:
+
         if SETTINGS[site_key]["enabled"]:
             accounts = get_site_accounts(site_key)
             site_name = SETTINGS[site_key]["name"]
