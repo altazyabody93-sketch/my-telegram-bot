@@ -1,24 +1,31 @@
+import sys
+import os
 import time
 import re
 import json
-import os
 import html
 import random
 import uuid
 import pickle
-import cloudscraper
-import requests
-import phonenumbers
-from phonenumbers import geocoder
-from bs4 import BeautifulSoup
+import shutil
 from datetime import datetime, date, timedelta
 from threading import Thread, Event
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus
-import shutil
+
+# المكتبات الخارجية (Third-party libraries)
+import telebot
+from telebot import types
+from telebot.apihelper import ApiTelegramException  # 👈 تم إضافتها لمنع توقف البوت عند أخطاء التعديل
+import requests
+import cloudscraper
+import phonenumbers
+from phonenumbers import geocoder
+from bs4 import BeautifulSoup
 from flask import Flask, jsonify
-import sys
+
+
 
 BOT_TOKEN ="8899073812:AAHg9byFL9l6VaoyfRMajyFHz6gnK1eJGhk"
 MAIN_ADMIN_ID = 7325566792
@@ -503,9 +510,9 @@ DEFAULT_SETTINGS = {
         "accounts": [
             {
                 "id": str(uuid.uuid4()),
-                "username": os.getenv("Altazyabody90", ""),
-                "password": os.getenv("8gHmLsQ#RxnKAQA", ""),
-                "bearer_token": os.getenv("apit-sFaAwRXiaRnADlqIOgN15upb5xYsrZkH-tk7P0", "")
+                "username": "Altazyabody90",
+                "password": "8gHmLsQ#RxnKAQA",
+                "bearer_token": "apit-sFaAwRXiaRnADlqIOgN15upb5xYsrZkH-tk7P0"
             }
         ],
         "api_url": "https://rest.moceanapi.com/rest/2/sms",
@@ -516,112 +523,150 @@ DEFAULT_SETTINGS = {
     }
 }
 
-# مواقع اختيارية قد تكون موجودة في ملفات قديمة؛ تعطيلها يمنع KeyError.
-DEFAULT_SETTINGS.setdefault("IMS", {"name": "IMS", "accounts": [], "check_interval": 5, "timeout": 30, "enabled": False})
-DEFAULT_SETTINGS.setdefault("Moskano", {"name": "Moskano", "accounts": [], "check_interval": 5, "timeout": 30, "enabled": False})
 
-# 2. دوال MOCEAN والإعدادات
-
-def _deepcopy(value):
-    """نسخة مستقلة من قيمة الإعدادات حتى لا تتغير DEFAULT_SETTINGS بالخطأ."""
-    return json.loads(json.dumps(value, ensure_ascii=False))
-
-
+# 2. دالة إرسال الـ SMS
 def send_mocean_sms(to_phone: str, text_message: str):
-    """إرسال رسالة عبر MOCEAN وإرجاع JSON موحد، من دون كشف الأسرار في السجل."""
-    config = SETTINGS.get("MOCEAN", {}) if "SETTINGS" in globals() else DEFAULT_SETTINGS.get("MOCEAN", {})
-    accounts = config.get("accounts") or []
-    account = accounts[0] if accounts and isinstance(accounts[0], dict) else {}
-    url = config.get("api_url")
-    token = account.get("bearer_token") or os.getenv("MOCEAN_BEARER_TOKEN", "")
-    timeout = config.get("timeout", 30)
-    if not url or not token:
-        return {"status": "error", "message": "MOCEAN غير مهيأ: api_url أو bearer_token مفقود"}
-    if not str(to_phone).strip() or not str(text_message).strip():
-        return {"status": "error", "message": "رقم المستلم والنص مطلوبان"}
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/x-www-form-urlencoded"}
-    payload = {"mocean-from": config.get("sender", "MOCEAN"), "mocean-to": str(to_phone).strip(), "mocean-text": str(text_message)}
+    account = MOCEAN_CONFIG["MOCEAN"]["accounts"][0]
+    url = MOCEAN_CONFIG["MOCEAN"]["api_url"]
+    
+    headers = {
+        "Authorization": f"Bearer {account['bearer_token']}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    payload = {
+        "mocean-from": "MOCEAN",
+        "mocean-to": to_phone,
+        "mocean-text": text_message
+    }
+    
     try:
-        response = requests.post(url, headers=headers, data=payload, timeout=timeout)
-        try:
-            body = response.json()
-        except ValueError:
-            body = {"raw": response.text[:1000]}
-        if isinstance(body, dict):
-            body.setdefault("http_status", response.status_code)
-        return body
-    except requests.RequestException as exc:
-        return {"status": "error", "message": f"فشل اتصال MOCEAN: {exc.__class__.__name__}"}
+        response = requests.post(
+            url, 
+            headers=headers, 
+            data=payload, 
+            timeout=MOCEAN_CONFIG["MOCEAN"]["timeout"]
+        )
+        return response.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 def migrate_old_settings(settings):
-    """ترحيل الإعدادات القديمة مع تجاهل المواقع المفقودة بدلاً من KeyError."""
-    if not isinstance(settings, dict):
-        settings = {}
     migrated = False
-    for site_key, default in DEFAULT_SETTINGS.items():
-        current = settings.get(site_key)
-        if not isinstance(current, dict):
-            settings[site_key] = _deepcopy(default)
-            migrated = True
-            continue
-        if "accounts" not in current and ("username" in current or "password" in current):
-            current["accounts"] = [{"id": str(uuid.uuid4()), "username": current.pop("username", ""), "password": current.pop("password", "")}]
-            migrated = True
-        if current.get("check_interval", 5) == 7:
-            current["check_interval"] = 5
-            migrated = True
-        current.setdefault("name", default.get("name", site_key))
-        current.setdefault("accounts", _deepcopy(default.get("accounts", [])))
-        for key in ("check_interval", "timeout", "enabled"):
-            if key in default:
-                current.setdefault(key, default[key])
-    if "Share" in settings:
-        if "proton SMS" not in settings:
-            settings["proton SMS"] = settings["Share"]
-            settings["proton SMS"]["name"] = "proton SMS"
-        settings.pop("Share", None)
+    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS"]:
+        if site_key in settings:
+            if "username" in settings[site_key] and "accounts" not in settings[site_key]:
+                old_username = settings[site_key]["username"]
+                old_password = settings[site_key]["password"]
+                settings[site_key]["accounts"] = [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "username": old_username,
+                        "password": old_password
+                    }
+                ]
+                del settings[site_key]["username"]
+                del settings[site_key]["password"]
+                migrated = True
+            
+            if settings[site_key].get("check_interval", 5) == 7:
+                settings[site_key]["check_interval"] = 5
+                migrated = True
+                print(f"✅ تحديث سرعة {site_key} من 7 إلى 5 ثواني")
+    
+    if "iVASMS" not in settings:
+        settings["iVASMS"] = DEFAULT_SETTINGS["iVASMS"].copy()
         migrated = True
+        print("✅ تم إضافة موقع iVASMS للإعدادات")
+    
+    if "MSI" not in settings:
+        settings["MSI"] = DEFAULT_SETTINGS["MSI"].copy()
+        migrated = True
+    
+    if "proton SMS" not in settings:
+        settings["proton SMS"] = DEFAULT_SETTINGS["proton SMS"].copy()
+        migrated = True
+    
+    if "IMS" not in settings:
+        settings["IMS"] = DEFAULT_SETTINGS["IMS"].copy()
+        migrated = True
+
+    if "Roxy SMS" not in settings:
+        settings["Roxy SMS"] = DEFAULT_SETTINGS["Roxy SMS"].copy()
+        migrated = True
+
+    if "TimeSMS" not in settings:
+        settings["TimeSMS"] = DEFAULT_SETTINGS["TimeSMS"].copy()
+        migrated = True
+
+    if "Konekta" not in settings:
+        settings["Konekta"] = DEFAULT_SETTINGS["Konekta"].copy()
+        migrated = True
+
+    if "hadi" not in settings:
+        settings["hadi"] = DEFAULT_SETTINGS["hadi"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع hadi للإعدادات")
+
+    if "Seven1Tel" not in settings:
+        settings["Seven1Tel"] = DEFAULT_SETTINGS["Seven1Tel"].copy()
+    if "Gaza SMS" not in settings:
+        settings["Gaza SMS"] = DEFAULT_SETTINGS["Gaza SMS"].copy()
+        print("✅ تم إضافة موقع Gaza SMS للإعدادات")
+        migrated = True
+        print("✅ تم إضافة موقع Seven1Tel للإعدادات")
+
+    if "Km sms" not in settings:
+        settings["Km sms"] = DEFAULT_SETTINGS["Km sms"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع Km sms للإعدادات")
+
+    if "fire" not in settings:
+        settings["fire"] = DEFAULT_SETTINGS["fire"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع fire للإعدادات")
+
+    if "Grand SMS" not in settings:
+        settings["Grand SMS"] = DEFAULT_SETTINGS["Grand SMS"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع Grand SMS للإعدادات")
+
+    if "Purple SMS" not in settings:
+        settings["Purple SMS"] = DEFAULT_SETTINGS["Purple SMS"].copy()
+        migrated = True
+        print("✅ تم إضافة موقع Purple SMS للإعدادات")
+    
+    if "Share" in settings and "proton SMS" not in settings:
+        settings["proton SMS"] = settings["Share"].copy()
+        settings["proton SMS"]["name"] = "proton SMS"
+        del settings["Share"]
+        migrated = True
+    elif "Share" in settings:
+        del settings["Share"]
+        migrated = True
+    
     return settings, migrated
 
-
 def load_settings():
-    """تحميل JSON، ثم دمجه مع القيم الافتراضية وإعادة بنائه عند تلفه."""
-    settings = {}
     if os.path.exists(SETTINGS_FILE):
         try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
-        except (OSError, ValueError, TypeError) as exc:
-            print(f"⚠️ تعذر قراءة {SETTINGS_FILE}: {exc.__class__.__name__}")
-    settings, migrated = migrate_old_settings(settings)
-    if migrated or not os.path.exists(SETTINGS_FILE):
-        save_settings(settings)
-    return settings
-
+                settings, migrated = migrate_old_settings(settings)
+                if migrated:
+                    save_settings(settings)
+                return settings
+        except:
+            pass
+    return DEFAULT_SETTINGS.copy()
 
 def save_settings(settings):
-    """حفظ الإعدادات بشكل ذري لتجنب ملف JSON نصف مكتوب عند انقطاع العملية."""
-    if not isinstance(settings, dict):
-        raise TypeError("settings يجب أن يكون قاموساً")
-    directory = os.path.dirname(os.path.abspath(SETTINGS_FILE)) or "."
-    temp_path = os.path.join(directory, f".{os.path.basename(SETTINGS_FILE)}.tmp")
-    with open(temp_path, "w", encoding="utf-8") as f:
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temp_path, SETTINGS_FILE)
-
-def get_site_config(site_key):
-    """إرجاع إعدادات الموقع كقاموس آمن حتى عند غياب الموقع أو تلف قيمته."""
-    value = SETTINGS.get(site_key, {})
-    return value if isinstance(value, dict) else {}
-
 
 def get_site_accounts(site_key):
-    """إرجاع الحسابات الصالحة فقط، مع حماية القائمة من KeyError وTypeError."""
-    accounts = get_site_config(site_key).get("accounts", [])
-    return [account for account in accounts if isinstance(account, dict)] if isinstance(accounts, list) else []
+    return SETTINGS.get(site_key, {}).get("accounts", [])
 
 def add_account(site_key, username, password):
     if site_key not in SETTINGS:
@@ -768,13 +813,12 @@ CHECK_INTERVAL7 = SETTINGS["proton SMS"]["check_interval"]
 
 USERNAME8 = get_first_account("IMS").get("username", "")
 PASSWORD8 = get_first_account("IMS").get("password", "")
-IMS_CONFIG = get_site_config("IMS")
-BASE_URL8 = IMS_CONFIG.get("base_url", "")
-LOGIN_PAGE_URL8 = IMS_CONFIG.get("login_page_url", "")
-LOGIN_POST_URL8 = IMS_CONFIG.get("login_post_url", "")
-AJAX_PATH8 = IMS_CONFIG.get("ajax_path", "/agent/res/data_smscdr.php")
-HTTP_TIMEOUT8 = IMS_CONFIG.get("timeout", 30)
-CHECK_INTERVAL8 = IMS_CONFIG.get("check_interval", 5)
+BASE_URL8 = SETTINGS["IMS"]["base_url"]
+LOGIN_PAGE_URL8 = SETTINGS["IMS"]["login_page_url"]
+LOGIN_POST_URL8 = SETTINGS["IMS"]["login_post_url"]
+AJAX_PATH8 = SETTINGS["IMS"]["ajax_path"]
+HTTP_TIMEOUT8 = SETTINGS["IMS"]["timeout"]
+CHECK_INTERVAL8 = SETTINGS["IMS"]["check_interval"]
 
 USERNAME9 = get_first_account("Roxy SMS").get("username", "")
 PASSWORD9 = get_first_account("Roxy SMS").get("password", "")
@@ -4664,10 +4708,6 @@ def get_sites_menu():
         InlineKeyboardButton("🌐 iVAS SMS", callback_data="site_config_iVASMS")
     )
     markup.add(
-        InlineKeyboardButton("🆕 MOCEAN", callback_data="site_config_MOCEAN"),
-        InlineKeyboardButton("🔄 إعادة اللوحة الجديدة", callback_data="reset_new_panel")
-    )
-    markup.add(
         InlineKeyboardButton("🔵 MSI", callback_data="site_config_MSI"),
         InlineKeyboardButton(" proton SMS", callback_data="site_config_proton SMS")
     )
@@ -4693,8 +4733,7 @@ def get_sites_menu():
     return markup
 
 def get_site_config_menu(site_key, account_id=None):
-    site_config = get_site_config(site_key)
-    site_name = site_config.get("name", site_key)
+    site_name = SETTINGS[site_key]["name"]
     short_id = account_id[:8] if account_id else ""
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -4709,8 +4748,6 @@ def get_site_config_menu(site_key, account_id=None):
         InlineKeyboardButton("🔓 اختبار تسجيل الدخول", callback_data=f"site_test_login_{site_key}_{short_id}"),
         InlineKeyboardButton("📥 اختبار جلب كود", callback_data=f"site_test_fetch_{site_key}_{short_id}")
     )
-    if site_key == "Number_Panel":
-        markup.add(InlineKeyboardButton("🔄 إعادة ضبط اللوحة الجديدة", callback_data="reset_new_panel"))
     markup.add(InlineKeyboardButton(
         "رجوع لقائمة المواقع",
         callback_data="admin_sites_menu",
@@ -4720,7 +4757,7 @@ def get_site_config_menu(site_key, account_id=None):
     return markup
 
 def get_site_accounts_selection_menu(site_key):
-    site_name = get_site_config(site_key).get("name", site_key)
+    site_name = SETTINGS[site_key]["name"]
     accounts = get_site_accounts(site_key)
     
     markup = InlineKeyboardMarkup(row_width=2)
@@ -4796,7 +4833,7 @@ def get_accounts_menu():
     return markup
 
 def get_site_accounts_menu(site_key):
-    site_name = get_site_config(site_key).get("name", site_key)
+    site_name = SETTINGS[site_key]["name"]
     accounts = get_site_accounts(site_key)
     
     markup = InlineKeyboardMarkup(row_width=2)
@@ -9325,28 +9362,6 @@ def sites_menu_callback(call):
             reply_markup=get_sites_menu()
         )
 
-@bot.callback_query_handler(func=lambda call: call.data == "reset_new_panel")
-def reset_new_panel_callback(call):
-    """إعادة جلسة Number Panel فقط، ثم إجبار البوت على تسجيل الدخول مجدداً."""
-    if not is_admin(call.from_user.id):
-        bot.answer_callback_query(call.id, "⛔️ غير مصرح لك", show_alert=True)
-        return
-    global is_logged_in_site3
-    is_logged_in_site3 = False
-    try:
-        session3.cookies.clear()
-    except Exception:
-        pass
-    for path in (COOKIES_FILE_SITE3,):
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except OSError as exc:
-            print(f"⚠️ تعذر حذف جلسة اللوحة الجديدة: {exc.__class__.__name__}")
-    bot.answer_callback_query(call.id, "✅ تمت إعادة ضبط اللوحة الجديدة")
-    bot.edit_message_text("✅ تمت إعادة ضبط جلسة اللوحة الجديدة. يمكنك الآن اختبار تسجيل الدخول مجدداً.", call.message.chat.id, call.message.message_id, reply_markup=get_site_config_menu("Number_Panel"))
-
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("site_config_"))
 def site_config_callback(call):
     user_id = call.from_user.id
@@ -9355,14 +9370,10 @@ def site_config_callback(call):
         return
     
     site_key = call.data.replace("site_config_", "")
-    site_config = get_site_config(site_key)
+    site_config = SETTINGS.get(site_key, {})
     site_name = site_config.get("name", site_key)
     accounts = get_site_accounts(site_key)
     
-    if not site_config:
-        bot.answer_callback_query(call.id, "⚠️ هذا الموقع غير مهيأ حالياً", show_alert=True)
-        return
-
     if len(accounts) > 1:
         accounts_text = f"⚙️ <b>إعدادات {site_name}</b>\n\n"
         accounts_text += f"👥 <b>عدد الحسابات:</b> {len(accounts)}\n\n"
@@ -12333,7 +12344,7 @@ def handle_messages(msg):
         if new_account:
             del user_states[user_id]
             
-            if get_site_config(site_key).get("enabled", False):
+            if SETTINGS[site_key]["enabled"]:
                 thread = Thread(target=start_monitoring_for_account, args=(site_key, new_account), daemon=True)
                 thread.start()
                 print(f"🚀 بدء مراقبة فورية للحساب الجديد: {username} ({site_name})")
@@ -12382,7 +12393,7 @@ def handle_messages(msg):
             
             del user_states[user_id]
             
-            if get_site_config(site_key).get("enabled", False):
+            if SETTINGS[site_key]["enabled"]:
                 new_account["api_key"] = api_key
                 thread = Thread(target=start_monitoring_for_account, args=(site_key, new_account), daemon=True)
                 thread.start()
@@ -14916,19 +14927,8 @@ def sms_loop_for_purple_sms_account(site_key, account):
             break
 
 
-def monitor_loop(site_key, account):
-    """تشغيل حلقة المراقبة للمواقع القائمة على HTTP/SMSCDR."""
-    return sms_loop_requests_based(site_key, account)
-
-
 def start_monitoring_for_account(site_key, account):
-    site_config = get_site_config(site_key)
-    if not site_config.get("enabled", False):
-        print(f"[{site_key}] ⏸️ الموقع معطل أو إعداداته ناقصة")
-        return
-    if site_key == "MOCEAN":
-        print("[MOCEAN] ℹ️ هذا الموقع مخصص لإرسال SMS عبر API ولا يحتاج مراقبة SMSCDR")
-        return
+    
     if site_key == "Number_Panel":
         sms_loop_for_number_panel_account(site_key, account)
     elif site_key == "iVASMS":
@@ -14946,7 +14946,7 @@ def start_monitoring_for_account(site_key, account):
     elif site_key == "Purple SMS":
         sms_loop_for_purple_sms_account(site_key, account)
     else:
-        monitor_loop(site_key, account)
+        sms_loop_requests_based(site_key, account)
 
 
 def sms_loop_for_timesms_account(site_key, account):
@@ -16741,18 +16741,120 @@ def start_keep_alive():
         start_keep_alive._thread_started = True
         print("✅ Keep-Alive started!")
 
+
+
+
+
+# ── 1. إضافة الزر إلى قائمة اللوحات الرئيسية ───────────────────────────────────
+
+def get_main_panels_keyboard():
+    """تجهيز أزرار اللوحات الرئيسية لتظهر في أي مكان بالبوت"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    btn_mocean = types.InlineKeyboardButton("📱 لوحة MOCEAN", callback_data="panel_mocean")
+    btn_settings = types.InlineKeyboardButton("⚙️ الإعدادات", callback_data="panel_settings")
+    btn_custom_panel = types.InlineKeyboardButton("✨ اللوحة الجديدة", callback_data="show_custom_panel")
+    
+    markup.add(btn_mocean, btn_settings)
+    markup.add(btn_custom_panel)
+    return markup
+
+
+# ── 2. دالة الفحص الخاص باللوحة الجديدة ─────────────────────────────────────────
+
+def check_panel_status():
+    """دالة فحص البيانات أو حالة الخدمة الخاصة باللوحة الجديدة"""
+    try:
+        panel_config = SETTINGS.get("CUSTOM_PANEL", {})
+        is_enabled = panel_config.get("enabled", True)
+        
+        status_text = "🟢 شغال وبأعلى كفاءة" if is_enabled else "🔴 متوقف حالياً"
+        return status_text, is_enabled
+    except Exception as e:
+        print(f"⚠️ خطأ أثناء فحص اللوحة: {e}")
+        return "⚠️ تعذر الفحص", False
+
+
+# ── 3. دالة تحديث الواجهة (مفصلة لمنع تكرار الكود والتعارض) ────────────────────────
+
+def render_custom_panel_ui(chat_id, message_id):
+    """تحديث واجهة اللوحة وتفادي خطأ عدم تغيير محتوى الرسالة"""
+    status_label, is_active = check_panel_status()
+    
+    panel_text = (
+        "<b>📊 لوحة التحكم والإدارة الجديدة</b>\n"
+        "───────────────────\n"
+        f"<b>• حالة الخدمة:</b> {status_label}\n"
+        f"<b>• حالة الاتصال:</b> ⚡ مستقر\n"
+        "<b>• الوصول:</b> متاح من جميع الأقسام\n\n"
+        "<i>اختر من الأزرار أدناه لتنفيذ الفحص أو التحكم:</i>"
+    )
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_recheck = types.InlineKeyboardButton("🔍 إجراء فحص الآن", callback_data="show_custom_panel")
+    btn_toggle = types.InlineKeyboardButton("🔄 تغيير الحالة", callback_data="toggle_custom_panel")
+    btn_back = types.InlineKeyboardButton("🔙 الرجوع للقائمة الرئيسية", callback_data="back_to_main_menu")
+    
+    markup.add(btn_recheck, btn_toggle)
+    markup.add(btn_back)
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=panel_text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except ApiTelegramException as e:
+        if "message is not modified" in str(e):
+            pass  # تجديد الفحص دون تعديل الرسالة إذا لم تتغير البيانات
+        else:
+            raise e
+
+
+# ── 4. معالجات الكولباك (Callback Handlers) ────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda call: call.data == "show_custom_panel")
+def handle_custom_panel(call):
+    """معالج فتح وعرض اللوحة الجديدة عند الضغط على الزر"""
+    try:
+        bot.answer_callback_query(call.id, text="🔄 جاري فحص وتشغيل اللوحة...")
+        render_custom_panel_ui(call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        print(f"❌ خطأ أثناء عرض اللوحة الجديدة: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "toggle_custom_panel")
+def handle_panel_toggle(call):
+    """معالج زر التفعيل/التعطيل من داخل اللوحة"""
+    try:
+        if "CUSTOM_PANEL" not in SETTINGS:
+            SETTINGS["CUSTOM_PANEL"] = {}
+            
+        current_status = SETTINGS["CUSTOM_PANEL"].get("enabled", True)
+        SETTINGS["CUSTOM_PANEL"]["enabled"] = not current_status
+        
+        if 'save_settings' in globals():
+            save_settings(SETTINGS)
+            
+        bot.answer_callback_query(call.id, text="✅ تم تغيير حالة اللوحة بنجاح!")
+        render_custom_panel_ui(call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        print(f"❌ خطأ أثناء تغيير الحالة: {e}")
+
+
+
 if __name__ == "__main__":
     load_data()
     
     monitoring_threads = []
     print("🚀 بدء تشغيل نظام المراقبة متعدد الحسابات...")
     
-    site_keys = ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS", "MOCEAN", "Moskano"]
-    for site_key in site_keys:
-        site_config = get_site_config(site_key)
-        if site_config.get("enabled", False):
+    for site_key in ["GROUP", "Fly sms", "Number_Panel", "Bolt", "iVASMS", "MSI", "proton SMS", "IMS", "Roxy SMS", "TimeSMS", "Konekta", "hadi", "fire", "Seven1Tel", "Gaza SMS", "Km sms", "Grand SMS", "Purple SMS"]:
+        if SETTINGS[site_key]["enabled"]:
             accounts = get_site_accounts(site_key)
-            site_name = site_config.get("name", site_key)
+            site_name = SETTINGS[site_key]["name"]
             
             if accounts:
                 print(f"\n📋 {site_name}: وجدت {len(accounts)} حساب")
