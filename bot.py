@@ -811,14 +811,15 @@ AJAX_PATH7 = SETTINGS["proton SMS"]["ajax_path"]
 HTTP_TIMEOUT7 = SETTINGS["proton SMS"]["timeout"]
 CHECK_INTERVAL7 = SETTINGS["proton SMS"]["check_interval"]
 
-USERNAME8 = get_first_account("IMS").get("username", "")
-PASSWORD8 = get_first_account("IMS").get("password", "")
-BASE_URL8 = SETTINGS["IMS"]["base_url"]
-LOGIN_PAGE_URL8 = SETTINGS["IMS"]["login_page_url"]
-LOGIN_POST_URL8 = SETTINGS["IMS"]["login_post_url"]
-AJAX_PATH8 = SETTINGS["IMS"]["ajax_path"]
-HTTP_TIMEOUT8 = SETTINGS["IMS"]["timeout"]
-CHECK_INTERVAL8 = SETTINGS["IMS"]["check_interval"]
+USERNAME8 = ""
+PASSWORD8 = ""
+BASE_URL8 = ""
+LOGIN_PAGE_URL8 = ""
+LOGIN_POST_URL8 = ""
+AJAX_PATH8 = ""
+HTTP_TIMEOUT8 = 10
+CHECK_INTERVAL8 = 5
+
 
 USERNAME9 = get_first_account("Roxy SMS").get("username", "")
 PASSWORD9 = get_first_account("Roxy SMS").get("password", "")
