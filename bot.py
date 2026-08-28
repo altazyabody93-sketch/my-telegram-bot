@@ -831,14 +831,15 @@ HTTP_TIMEOUT9 = SETTINGS["Roxy SMS"]["timeout"]
 CHECK_INTERVAL9 = SETTINGS["Roxy SMS"]["check_interval"]
 
 
-USERNAME11 = get_first_account("Konekta").get("username", "")
-PASSWORD11 = get_first_account("Konekta").get("password", "")
-BASE_URL11 = SETTINGS["Konekta"]["base_url"]
-LOGIN_PAGE_URL11 = SETTINGS["Konekta"]["login_page_url"]
-LOGIN_POST_URL11 = SETTINGS["Konekta"]["login_post_url"]
-AJAX_PATH11 = SETTINGS["Konekta"]["ajax_path"]
-HTTP_TIMEOUT11 = SETTINGS["Konekta"]["timeout"]
-CHECK_INTERVAL11 = SETTINGS["Konekta"]["check_interval"]
+USERNAME11 = ""
+PASSWORD11 = ""
+BASE_URL11 = ""
+LOGIN_PAGE_URL11 = ""
+LOGIN_POST_URL11 = ""
+AJAX_PATH11 = ""
+HTTP_TIMEOUT11 = 10
+CHECK_INTERVAL11 = 5
+
 
 USERNAME10 = get_first_account("TimeSMS").get("username", "")
 PASSWORD10 = get_first_account("TimeSMS").get("password", "")
