@@ -10,7 +10,7 @@ from datetime import datetime
 from telebot.types import BotCommand
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 # ========== الإعدادات ==========
-BOT_TOKEN = "8971686005:AAFyF1VPhgGF2b4OmXKspfB7W7aM_OBPT0E"
+BOT_TOKEN = "8971686005:AAH3WZesb9tlUtswhi-tX3v0jRhw70Lopcg"
 ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
 DEVELOPER_USERNAME = "MO_5_H"
 DB_PATH = "store.db"
