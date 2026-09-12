@@ -12,7 +12,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 # ========== الإعدادات ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAEsGXoj4ky9FfOp3YPjNFMrDeC3wSfhhUk")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAFYXxVd8K1L3naNz3F49YR7pgI_zEeEO5k")
 ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
 DEVELOPER_USERNAME = "MO_5_H"
 DB_PATH = "store.db"
@@ -3011,7 +3011,6 @@ if __name__ == "__main__":
     @bot_web.route('/')
     @bot_web.route('/health')
     def health():
-        """Health check لـ UptimeRobot"""
         return {
             'status': 'ok' if bot_status['running'] else 'starting',
             'bot': 'running' if bot_status['running'] else 'initializing',
@@ -3021,7 +3020,6 @@ if __name__ == "__main__":
     
     @bot_web.route('/ping')
     def ping():
-        """endpoint سريع جداً لـ UptimeRobot"""
         return "pong", 200
     
     def run_web():
@@ -3032,13 +3030,13 @@ if __name__ == "__main__":
             port=port,
             debug=False,
             threaded=True,
-            use_reloader=False  # مهم — يمنع تشغيل مزدوج
+            use_reloader=False
         )
     
-    # ===== قاعدة البيانات =====
+    # ===== 1. قاعدة البيانات =====
     init_db()
     
-    # ===== تسجيل الأوامر =====
+    # ===== 2. تسجيل الأوامر =====
     try:
         bot.set_my_commands([
             BotCommand("start", "🏠 بدء البوت"),
@@ -3050,29 +3048,32 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ {e}")
     
-    # ===== معلومات التشغيل =====
+    # ===== 3. معلومات =====
     rate = get_exchange_rate()
     print("=" * 50)
     print("🚀 النظام يبدأ...")
     print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
     print(f"💱 سعر الصرف: {rate} ⭐ = 1$")
-    print(f"👨‍💻 المطور: @{DEVELOPER_USERNAME}")
     print("=" * 50)
     
-    # ===== حذف Webhook مرة واحدة فقط (خارج الحلقة!) =====
+    # ===== 4. حذف Webhook (مع تنظيف كامل) =====
     try:
         print("🔄 حذف Webhook...")
-        bot.delete_webhook(drop_pending_updates=False)
-        print("✅ تم")
+        bot.delete_webhook(drop_pending_updates=True)  # ← True مهم!
+        print("✅ تم حذف Webhook")
     except Exception as e:
         print(f"⚠️ {e}")
     
-    # ===== تشغيل Web Server في Thread =====
+    # ===== 5. تشغيل Web Server =====
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     print("🌐 Web Server شغال في Thread منفصل")
     
-    # ===== تشغيل Polling (بدون delete_webhook داخل الحلقة) =====
+    # ===== 6. انتظار قبل polling (مهم لمنع 409) =====
+    print("⏳ انتظار 8 ثواني قبل تشغيل polling...")
+    time.sleep(8)
+    
+    # ===== 7. تشغيل Polling =====
     bot_status['running'] = True
     print("🚀 البوت يبدأ استقبال الرسائل...")
     
@@ -3082,9 +3083,9 @@ if __name__ == "__main__":
                 timeout=30,
                 long_polling_timeout=20,
                 none_stop=True,
-                skip_pending=False
+                skip_pending=True  # ← True لمنع معالجة رسائل قديمة
             )
         except Exception as e:
             print(f"❌ خطأ في Polling: {e}")
-            print("⏳ إعادة المحاولة بعد 5 ثوان...")
-            time.sleep(5)
+            print("⏳ إعادة المحاولة بعد 10 ثواني...")
+            time.sleep(10)
