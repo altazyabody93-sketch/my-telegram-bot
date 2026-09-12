@@ -28,7 +28,7 @@ from flask import (
 # =========================================================
 # ========== الإعدادات ====================================
 # =========================================================
-BOT_TOKEN = os.environ.get("8971686005:AAEsGXoj4ky9FfOp3YPjNFMrDeC3wSfhhUk")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAEsGXoj4ky9FfOp3YPjNFMrDeC3wSfhhUk")
 if not BOT_TOKEN:
     print("❌ خطأ: BOT_TOKEN غير موجود في Environment Variables!")
     sys.exit(1)
