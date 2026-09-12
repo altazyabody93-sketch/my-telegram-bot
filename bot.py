@@ -9,6 +9,21 @@ import re
 from datetime import datetime
 from telebot.types import BotCommand
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+
+# ✅ إضافات Web Server
+from flask import Flask
+import threading
+# ========== Web Server للمراقبة ==========
+bot_web = Flask(__name__)
+
+@bot_web.route('/')
+@bot_web.route('/health')
+def health():
+    ...
+
+def run_web():
+    port = int(os.environ.get('PORT', 8080))
+    bot_web.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 # ========== الإعدادات ==========
 BOT_TOKEN = "8971686005:AAH3WZesb9tlUtswhi-tX3v0jRhw70Lopcg"
 ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
@@ -2996,6 +3011,11 @@ def btn_restart(message):
 # ========== تشغيل البوت ==========
 if __name__ == "__main__":
     init_db()
+    
+    # ✅ تشغيل Web Server في Thread
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    print("🌐 Web Server شغال في Thread منفصل")
     
     # تسجيل قائمة الأوامر في Telegram
     try:
