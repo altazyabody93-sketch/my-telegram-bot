@@ -3013,7 +3013,6 @@ if __name__ == "__main__":
         }, 200
     
     def run_web():
-        # ✅ Render يعطي PORT تلقائياً — محلياً 5000
         port = int(os.environ.get('PORT', 5000))
         print(f"🌐 Web Server شغال على المنفذ {port}")
         bot_web.run(host='0.0.0.0', port=port, debug=False, threaded=True)
@@ -3048,12 +3047,18 @@ if __name__ == "__main__":
     print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
     print(f"📢 القناة: {get_channel_id()}")
     
-        # ===== تشغيل البوت =====
+    # ===== حذف Webhook مرة وحدة قبل التشغيل =====
+    try:
+        print("🔄 جاري حذف Webhook القديم...")
+        bot.remove_webhook()
+        print("✅ تم حذف Webhook")
+        time.sleep(1)
+    except Exception as e:
+        print(f"⚠️ فشل حذف Webhook: {e}")
+    
+    # ===== تشغيل البوت =====
     while True:
         try:
-            print("🔄 جاري تنظيف الويب هوك القديم...")
-            bot.remove_webhook()  # <--- أضف هذا السطر لحل المشكلة نهائياً
-            
             print("🚀 البوت يبدأ استقبال الرسائل...")
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
         except Exception as e:
