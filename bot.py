@@ -1,746 +1,1038 @@
-# =========================================================
-# all_in_one.py
-# بوت Telegram + موقع Flask + قاعدة بيانات SQLite
-# ملف واحد — يشغل كل شيء
-# =========================================================
-
-import os
-import sys
-import json
-import time
-import hmac
-import sqlite3
-import hashlib
-import logging
-import threading
-import traceback
-import requests
 import telebot
 from telebot import types
-from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
+import sqlite3
+import json
+import os
+import time
+import logging
+import re
 from datetime import datetime
-from functools import wraps
-from flask import (
-    Flask, request, redirect, url_for, session, flash,
-    jsonify, abort, get_flashed_messages
-)
+from telebot.types import BotCommand
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# =========================================================
-# ========== الإعدادات ====================================
-# =========================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAEsGXoj4ky9FfOp3YPjNFMrDeC3wSfhhUk")
-if not BOT_TOKEN:
-    print("❌ خطأ: BOT_TOKEN غير موجود في Environment Variables!")
-    sys.exit(1)
 
-ADMIN_IDS = ["7325566792", "7602226699"]
+# ========== الإعدادات ==========
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAFPh8fAUNdehGuy8B2jd3l6KQlu32w1XJY")
+ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
 DEVELOPER_USERNAME = "MO_5_H"
-DB_PATH = os.environ.get("DB_PATH", "store.db")
-SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-key-now")
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "http://localhost:5000")
-PORT = int(os.environ.get("PORT", 5000))
+DB_PATH = "store.db"
+CHANNEL_ID = "@your_channel"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ===== كائنات رئيسية =====
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
-app.secret_key = SECRET_KEY
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False
-
-# ===== متغيرات عامة =====
-user_data = {}
-bot_status = {
-    'running': False,
-    'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-    'last_activity': None
-}
-
-
-# =========================================================
-# ========== قاعدة البيانات ================================
-# =========================================================
-def db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    """إنشاء كل الجداول + الإعدادات الافتراضية"""
-    with db() as conn:
-        # المنتجات
-        conn.execute('''CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT, description TEXT,
-            price_usd REAL, price_stars INTEGER,
-            category TEXT, stock INTEGER DEFAULT 1,
-            code TEXT, status TEXT DEFAULT 'available',
-            sale_type TEXT DEFAULT 'auto',
-            created_at TEXT, sold_at TEXT, buyer_id TEXT, file_id TEXT
-        )''')
-        # المستخدمين
-        conn.execute('''CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT UNIQUE, username TEXT, first_name TEXT,
-            balance_usd REAL DEFAULT 0, balance_stars INTEGER DEFAULT 0,
-            total_spent REAL DEFAULT 0, orders_count INTEGER DEFAULT 0,
-            created_at TEXT, last_active TEXT
-        )''')
-        # المبيعات
-        conn.execute('''CREATE TABLE IF NOT EXISTS sales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER, buyer_id TEXT,
-            amount_usd REAL, amount_stars INTEGER,
-            payment_method TEXT, status TEXT DEFAULT 'pending',
-            sold_at TEXT
-        )''')
-        # الإعدادات
-        conn.execute('''CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY, value TEXT
-        )''')
-        # الأدمن
-        conn.execute('''CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT UNIQUE, added_at TEXT
-        )''')
-        # الأزرار
-        conn.execute('''CREATE TABLE IF NOT EXISTS buttons (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            button_key TEXT UNIQUE, label TEXT,
-            style TEXT DEFAULT 'default', row INTEGER DEFAULT 1,
-            col INTEGER DEFAULT 1, is_active INTEGER DEFAULT 1
-        )''')
-        # أسعار الشحن
-        conn.execute('''CREATE TABLE IF NOT EXISTS charge_prices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount_usd REAL, amount_stars INTEGER,
-            is_active INTEGER DEFAULT 1, created_at TEXT
-        )''')
-        # القنوات
-        conn.execute('''CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id TEXT, channel_name TEXT,
-            is_activation INTEGER DEFAULT 1, created_at TEXT
-        )''')
-        # إحصائيات النجوم
-        conn.execute('''CREATE TABLE IF NOT EXISTS star_charges (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT, username TEXT,
-            amount_usd REAL, amount_stars INTEGER, charged_at TEXT
-        )''')
-        # الإحالات
-        conn.execute('''CREATE TABLE IF NOT EXISTS referrals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            referrer_id TEXT, referred_id TEXT UNIQUE,
-            amount REAL, created_at TEXT
-        )''')
-
-        # ===== الإعدادات الافتراضية =====
-        defaults = [
-            ('exchange_rate', '50'),
-            ('store_name', '🛍️ متجر الأرقام'),
-            ('store_status', 'open'),
-            ('channel_id', ''),
-            ('referral_reward', '0.05'),
-            ('referral_enabled', '1'),
-            ('referral_daily_limit', '10'),
-            ('bot_username', 'sd_5g_bot'),
-        ]
-        for k, v in defaults:
-            conn.execute("INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)", (k, v))
-
-        # ===== الأزرار الافتراضية =====
-        default_buttons = [
-            ("show_products", "🛍️ المنتجات", "primary", 1, 1),
-            ("my_balance", "💰 رصيدي", "success", 1, 2),
-            ("charge_balance", "💳 شحن الرصيد", "danger", 2, 1),
-            ("my_orders", "📋 طلباتي", "primary", 2, 2),
-            ("support", "📞 تواصل مع الدعم", "danger", 3, 1),
-        ]
-        for key, label, style, row, col in default_buttons:
-            conn.execute(
-                "INSERT OR IGNORE INTO buttons (button_key,label,style,row,col) VALUES (?,?,?,?,?)",
-                (key, label, style, row, col)
-            )
-
-        # ===== أسعار الشحن الافتراضية =====
-        default_prices = [(1, 50), (2, 100), (5, 250), (10, 500), (20, 1000), (50, 2500)]
-        for usd, stars in default_prices:
-            conn.execute(
-                "INSERT OR IGNORE INTO charge_prices (amount_usd,amount_stars,created_at) VALUES (?,?,?)",
-                (usd, stars, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            )
-
-        # ===== الأدمن =====
-        for admin_id in ADMIN_IDS:
-            conn.execute(
-                "INSERT OR IGNORE INTO admins (user_id,added_at) VALUES (?,?)",
-                (admin_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            )
-
-        conn.commit()
-
-
-# =========================================================
-# ========== دوال الإعدادات ===============================
-# =========================================================
-def get_setting(key, default=""):
-    with db() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-        return row["value"] if row else default
-
-
-def set_setting(key, value):
-    with db() as conn:
-        conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", (key, str(value)))
-        conn.commit()
-
-
-def get_exchange_rate():
-    return int(get_setting('exchange_rate', '50'))
-
-
-def set_exchange_rate(rate):
-    set_setting('exchange_rate', rate)
-
-
-def get_channel_id():
-    return get_setting('channel_id', '')
-
-
-# =========================================================
-# ========== دوال المستخدمين ==============================
-# =========================================================
-def get_user(user_id):
-    with db() as conn:
-        row = conn.execute("SELECT * FROM users WHERE user_id=?", (str(user_id),)).fetchone()
-        return dict(row) if row else None
-
-
-def create_user(user_id, username="", first_name=""):
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with db() as conn:
-        try:
-            conn.execute(
-                "INSERT INTO users (user_id,username,first_name,created_at,last_active) VALUES (?,?,?,?,?)",
-                (str(user_id), username, first_name, now, now)
-            )
-            conn.commit()
-            return True
-        except sqlite3.IntegrityError:
-            return False
-
-
-def add_balance_usd(user_id, amount):
-    with db() as conn:
-        conn.execute("UPDATE users SET balance_usd = balance_usd + ? WHERE user_id=?",
-                     (amount, str(user_id)))
-        conn.commit()
-
-
-def add_balance_stars(user_id, amount):
-    with db() as conn:
-        conn.execute("UPDATE users SET balance_stars = balance_stars + ? WHERE user_id=?",
-                     (amount, str(user_id)))
-        conn.commit()
-
-
-def deduct_balance_usd(user_id, amount):
-    with db() as conn:
-        cur = conn.execute(
-            "UPDATE users SET balance_usd = balance_usd - ? WHERE user_id=? AND balance_usd >= ?",
-            (amount, str(user_id), amount)
-        )
-        conn.commit()
-        return cur.rowcount > 0
-
-
-def get_all_users():
-    with db() as conn:
-        total = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-        rows = conn.execute(
-            "SELECT * FROM users ORDER BY id DESC LIMIT 20"
-        ).fetchall()
-        return {"total": total, "users": [dict(r) for r in rows]}
-
-
-def count_users():
-    with db() as conn:
-        return conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-
-
-# =========================================================
-# ========== دوال الأدمن ==================================
-# =========================================================
-def add_admin(user_id):
-    with db() as conn:
-        try:
-            conn.execute("INSERT INTO admins (user_id,added_at) VALUES (?,?)",
-                         (str(user_id), datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            conn.commit()
-            return True
-        except sqlite3.IntegrityError:
-            return False
-
-
-def get_all_admins():
-    with db() as conn:
-        rows = conn.execute("SELECT user_id FROM admins").fetchall()
-        return [r["user_id"] for r in rows]
-
-
-def is_admin(user_id):
-    return str(user_id) in ADMIN_IDS or str(user_id) in get_all_admins()
-
-
-# =========================================================
-# ========== دوال المنتجات ================================
-# =========================================================
-def add_product(name="", description="", price_usd=0, price_stars=0,
-                category="", code="", stock=1, sale_type="auto", file_id=None):
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with db() as conn:
-        conn.execute(
-            """INSERT INTO products
-            (name,description,price_usd,price_stars,category,stock,code,sale_type,file_id,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (name, description, price_usd, price_stars, category,
-             stock, code, sale_type, file_id, now)
-        )
-        conn.commit()
-
-
-def get_available_products():
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM products WHERE status='available' AND stock>0 ORDER BY id DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_all_products():
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_product(pid):
-    with db() as conn:
-        row = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
-        return dict(row) if row else None
-
-
-def get_product_count():
-    with db() as conn:
-        avail = conn.execute(
-            "SELECT COUNT(*) c FROM products WHERE status='available' AND stock>0"
-        ).fetchone()["c"]
-        total = conn.execute("SELECT COUNT(*) c FROM products").fetchone()["c"]
-        return {"available": avail, "total": total}
-
-
-def mark_sold(pid, buyer_id):
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with db() as conn:
-        conn.execute(
-            "UPDATE products SET status='sold', stock=0, sold_at=?, buyer_id=? WHERE id=?",
-            (now, str(buyer_id), pid)
-        )
-        conn.commit()
-
-
-def update_stock(pid, stock):
-    with db() as conn:
-        conn.execute("UPDATE products SET stock=? WHERE id=?", (stock, pid))
-        conn.commit()
-
-
-def delete_product(pid):
-    with db() as conn:
-        conn.execute("DELETE FROM products WHERE id=?", (pid,))
-        conn.commit()
-
-
-# =========================================================
-# ========== دوال المبيعات ================================
-# =========================================================
-def add_sale(pid, buyer_id, amount_usd, amount_stars, method, status="completed"):
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with db() as conn:
-        cur = conn.execute(
-            """INSERT INTO sales
-            (product_id,buyer_id,amount_usd,amount_stars,payment_method,status,sold_at)
-            VALUES (?,?,?,?,?,?,?)""",
-            (pid, str(buyer_id), amount_usd, amount_stars, method, status, now)
-        )
-        conn.commit()
-        return cur.lastrowid
-
-
-def update_sale_status(sale_id, status):
-    with db() as conn:
-        conn.execute("UPDATE sales SET status=? WHERE id=?", (status, sale_id))
-        conn.commit()
-
-
-def get_recent_sales(limit=10):
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM sales ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_all_sales():
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM sales ORDER BY id DESC LIMIT 100").fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_user_sales(user_id):
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM sales WHERE buyer_id=? ORDER BY id DESC LIMIT 50",
-            (str(user_id),)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-# =========================================================
-# ========== دوال أسعار الشحن =============================
-# =========================================================
-def get_charge_prices():
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM charge_prices WHERE is_active=1 ORDER BY amount_usd ASC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def add_charge_price(amount_usd, amount_stars):
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO charge_prices (amount_usd,amount_stars,created_at) VALUES (?,?,?)",
-            (amount_usd, amount_stars, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        )
-        conn.commit()
-
-
-def delete_charge_price(pid):
-    with db() as conn:
-        conn.execute("UPDATE charge_prices SET is_active=0 WHERE id=?", (pid,))
-        conn.commit()
-
-
-def get_charge_price_by_id(pid):
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM charge_prices WHERE id=? AND is_active=1", (pid,)
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def update_charge_price(pid, amount_usd, amount_stars):
-    with db() as conn:
-        conn.execute(
-            "UPDATE charge_prices SET amount_usd=?, amount_stars=? WHERE id=?",
-            (amount_usd, amount_stars, pid)
-        )
-        conn.commit()
-
-
-# =========================================================
-# ========== دوال إحصائيات النجوم =========================
-# =========================================================
-def add_star_charge(user_id, username, amount_usd, amount_stars):
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO star_charges (user_id,username,amount_usd,amount_stars,charged_at) VALUES (?,?,?,?,?)",
-            (str(user_id), username, amount_usd, amount_stars,
-             datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        )
-        conn.commit()
-
-
-def get_star_charge_stats():
-    with db() as conn:
-        unique_users = conn.execute("SELECT COUNT(DISTINCT user_id) c FROM star_charges").fetchone()["c"]
-        total_charges = conn.execute("SELECT COUNT(*) c FROM star_charges").fetchone()["c"]
-        total_stars = conn.execute("SELECT COALESCE(SUM(amount_stars),0) s FROM star_charges").fetchone()["s"]
-        total_usd = conn.execute("SELECT COALESCE(SUM(amount_usd),0) s FROM star_charges").fetchone()["s"]
-        recent = conn.execute(
-            "SELECT * FROM star_charges ORDER BY id DESC LIMIT 10"
-        ).fetchall()
-        return {
-            "unique_users": unique_users,
-            "total_charges": total_charges,
-            "total_stars": total_stars,
-            "total_usd": total_usd,
-            "recent": [dict(r) for r in recent]
-        }
-
-
-# =========================================================
-# ========== دوال الإحالات ================================
-# =========================================================
-def get_referral_reward():
-    return float(get_setting('referral_reward', '0.05'))
-
-
-def set_referral_reward(amount):
-    set_setting('referral_reward', str(amount))
-
-
-def is_referral_enabled():
-    return get_setting('referral_enabled', '1') == '1'
-
-
-def get_referral_daily_limit():
-    return int(get_setting('referral_daily_limit', '10'))
-
-
-def add_referral(referrer_id, referred_id, amount):
-    with db() as conn:
-        try:
-            conn.execute(
-                "INSERT INTO referrals (referrer_id,referred_id,amount,created_at) VALUES (?,?,?,?)",
-                (str(referrer_id), str(referred_id), amount,
-                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            )
-            conn.commit()
-            return True
-        except sqlite3.IntegrityError:
-            return False
-
-
-def get_user_referrals(user_id):
-    with db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM referrals WHERE referrer_id=?",
-            (str(user_id),)
-        ).fetchone()
-        return {"count": row["c"], "total_earned": row["s"]}
-
-
-def get_daily_referrals(user_id):
-    today = datetime.now().strftime('%Y-%m-%d')
-    with db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) c FROM referrals WHERE referrer_id=? AND DATE(created_at)=?",
-            (str(user_id), today)
-        ).fetchone()
-        return row["c"]
-
-
-def get_recent_referrals(user_id, limit=10):
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM referrals WHERE referrer_id=? ORDER BY id DESC LIMIT ?",
-            (str(user_id), limit)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_referral_stats():
-    with db() as conn:
-        unique_referrers = conn.execute("SELECT COUNT(DISTINCT referrer_id) c FROM referrals").fetchone()["c"]
-        total_referrals = conn.execute("SELECT COUNT(*) c FROM referrals").fetchone()["c"]
-        total_paid = conn.execute("SELECT COALESCE(SUM(amount),0) s FROM referrals").fetchone()["s"]
-        recent = conn.execute("SELECT * FROM referrals ORDER BY id DESC LIMIT 10").fetchall()
-        return {
-            "unique_referrers": unique_referrers,
-            "total_referrals": total_referrals,
-            "total_paid": total_paid,
-            "recent": [dict(r) for r in recent]
-        }
-
-
-# =========================================================
-# ========== دوال الأزرار ================================
-# =========================================================
-def get_all_buttons():
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM buttons ORDER BY row ASC, col ASC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def update_button(key, label=None, style=None, row=None, col=None, is_active=None):
-    with db() as conn:
-        if label:
-            conn.execute("UPDATE buttons SET label=? WHERE button_key=?", (label, key))
-        if style:
-            conn.execute("UPDATE buttons SET style=? WHERE button_key=?", (style, key))
-        if row is not None:
-            conn.execute("UPDATE buttons SET row=? WHERE button_key=?", (row, key))
-        if col is not None:
-            conn.execute("UPDATE buttons SET col=? WHERE button_key=?", (col, key))
-        if is_active is not None:
-            conn.execute("UPDATE buttons SET is_active=? WHERE button_key=?", (is_active, key))
-        conn.commit()
-
-
-# =========================================================
-# ========== دوال القنوات =================================
-# =========================================================
-def add_channel(channel_id, channel_name=""):
-    with db() as conn:
-        try:
-            if not channel_name:
-                channel_name = f"قناة {channel_id}"
-            conn.execute(
-                "INSERT INTO channels (channel_id,channel_name,created_at) VALUES (?,?,?)",
-                (channel_id, channel_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            )
-            conn.commit()
-            return True
-        except:
-            return False
-
-
-def get_activation_channels():
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM channels WHERE is_activation=1").fetchall()
-        return [dict(r) for r in rows]
-
-
-def set_activation_channel(channel_id):
-    with db() as conn:
-        conn.execute("UPDATE channels SET is_activation=0")
-        conn.execute("UPDATE channels SET is_activation=1 WHERE channel_id=?", (channel_id,))
-        conn.commit()
-
-
-def get_activation_channel():
-    with db() as conn:
-        row = conn.execute(
-            "SELECT channel_id FROM channels WHERE is_activation=1 LIMIT 1"
-        ).fetchone()
-        return row["channel_id"] if row else None
-
-
-# =========================================================
-# ========== دوال مساعدة =================================
-# =========================================================
-def usd_to_stars(usd_amount):
-    rate = get_exchange_rate()
-    return int(usd_amount * rate)
-
 
 def get_user_mention(user_id, first_name):
     return f'<a href="tg://user?id={user_id}">{first_name}</a>'
 
-
 def get_username(user_id, username):
     if username:
         return f"@{username}"
-    return f'<a href="tg://user?id={user_id}">لا يوجد يوزر</a>'
+    else:
+        return f'<a href="tg://user?id={user_id}">لا يوجد يوزر</a>'
+
+user_data = {}
+product_data = {}
+
+# ========== دوال الإعدادات العامة ==========
+def get_setting(key, default_value=""):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key=?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else default_value
+
+def set_setting(key, value):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
+def get_exchange_rate():
+    return int(get_setting('exchange_rate', '50'))
+
+def set_exchange_rate(rate):
+    set_setting('exchange_rate', rate)
+
+def get_channel_id():
+    return get_setting('channel_id', CHANNEL_ID)
+    
+# ========== قاعدة البيانات ==========
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        description TEXT,
+        price_usd REAL,
+        price_stars INTEGER,
+        category TEXT,
+        stock INTEGER DEFAULT 1,
+        code TEXT,
+        status TEXT DEFAULT 'available',
+        sale_type TEXT DEFAULT 'auto',
+        created_at TEXT,
+        sold_at TEXT,
+        buyer_id TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT UNIQUE,
+        username TEXT,
+        first_name TEXT,
+        balance_usd REAL DEFAULT 0,
+        balance_stars INTEGER DEFAULT 0,
+        total_spent REAL DEFAULT 0,
+        orders_count INTEGER DEFAULT 0,
+        created_at TEXT,
+        last_active TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS sales (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER,
+        buyer_id TEXT,
+        amount_usd REAL,
+        amount_stars INTEGER,
+        payment_method TEXT,
+        status TEXT DEFAULT 'pending',
+        sold_at TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT UNIQUE,
+        added_at TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS buttons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        button_key TEXT UNIQUE,
+        label TEXT,
+        style TEXT DEFAULT 'default',
+        row INTEGER DEFAULT 1,
+        col INTEGER DEFAULT 1,
+        is_active INTEGER DEFAULT 1
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS charge_prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount_usd REAL,
+        amount_stars INTEGER,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS channels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT,
+        channel_name TEXT,
+        is_activation INTEGER DEFAULT 1,
+        created_at TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS star_charges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        username TEXT,
+        amount_usd REAL,
+        amount_stars INTEGER,
+        charged_at TEXT
+    )''')
+    
+    # ✅ جدول الإحالات (شارك واربح) - جديد
+    c.execute('''CREATE TABLE IF NOT EXISTS referrals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id TEXT,
+        referred_id TEXT UNIQUE,
+        amount REAL,
+        created_at TEXT
+    )''')
+    
+    # ✅ إضافة عمود file_id لجدول المنتجات
+    try:
+        c.execute("ALTER TABLE products ADD COLUMN file_id TEXT")
+    except:
+        pass
+    
+    # ✅ الإعدادات العامة
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("exchange_rate", "50"))
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("store_name", "🛍️ متجر الأرقام"))
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("store_status", "open"))
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("channel_id", CHANNEL_ID))
+    
+    # ✅ إعدادات الإحالة (شارك واربح) - جديدة
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("referral_reward", "0.05"))
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("referral_enabled", "1"))
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("referral_daily_limit", "10"))
+    
+    # ✅ الأزرار الافتراضية
+    default_buttons = [
+        ("show_products", "🛍️ المنتجات", "primary", 1, 1),
+        ("my_balance", "💰 رصيدي", "success", 1, 2),
+        ("charge_balance", "💳 شحن الرصيد", "danger", 2, 1),
+        ("my_orders", "📋 طلباتي", "primary", 2, 2),
+        ("support", "📞 تواصل مع الدعم", "danger", 3, 1),
+    ]
+    for key, label, style, row, col in default_buttons:
+        c.execute("INSERT OR IGNORE INTO buttons (button_key, label, style, row, col) VALUES (?, ?, ?, ?, ?)",
+                  (key, label, style, row, col))
+    
+    # ✅ أسعار الشحن الافتراضية
+    default_prices = [
+        (1, 50), (2, 100), (5, 250), (10, 500), (20, 1000), (50, 2500)
+    ]
+    for usd, stars in default_prices:
+        c.execute("INSERT OR IGNORE INTO charge_prices (amount_usd, amount_stars, created_at) VALUES (?, ?, ?)",
+                 (usd, stars, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    
+    # ✅ الأدمن
+    for admin_id in ADMIN_IDS:
+        c.execute("INSERT OR IGNORE INTO admins (user_id, added_at) VALUES (?, ?)", 
+                 (admin_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    
+    conn.commit()
+    conn.close()
+    
+ # ========== دوال الأزرار ==========
+def get_all_buttons():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT button_key, label, style, row, col, is_active FROM buttons ORDER BY row ASC, col ASC")
+    rows = c.fetchall()
+    conn.close()
+    return [{'key': r[0], 'label': r[1], 'style': r[2], 'row': r[3], 'col': r[4], 'is_active': r[5]} for r in rows]
+
+def update_button(key, label=None, style=None, row=None, col=None, is_active=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if label:
+        c.execute("UPDATE buttons SET label=? WHERE button_key=?", (label, key))
+    if style:
+        c.execute("UPDATE buttons SET style=? WHERE button_key=?", (style, key))
+    if row is not None:
+        c.execute("UPDATE buttons SET row=? WHERE button_key=?", (row, key))
+    if col is not None:
+        c.execute("UPDATE buttons SET col=? WHERE button_key=?", (col, key))
+    if is_active is not None:
+        c.execute("UPDATE buttons SET is_active=? WHERE button_key=?", (is_active, key))
+    conn.commit()
+    conn.close()
+
+# ========== دوال القنوات ==========
+def add_channel(channel_id, channel_name=""):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if not channel_name:
+            channel_name = f"قناة {channel_id}"
+        c.execute("INSERT INTO channels (channel_id, channel_name, created_at) VALUES (?, ?, ?)",
+                  (channel_id, channel_name, now))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def get_activation_channels():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT channel_id, channel_name FROM channels WHERE is_activation = 1")
+    rows = c.fetchall()
+    conn.close()
+    return [{'id': r[0], 'name': r[1]} for r in rows]
+
+def set_activation_channel(channel_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE channels SET is_activation = 0")
+    c.execute("UPDATE channels SET is_activation = 1 WHERE channel_id = ?", (channel_id,))
+    conn.commit()
+    conn.close()
+
+def get_activation_channel():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT channel_id FROM channels WHERE is_activation = 1 LIMIT 1")
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+    
+# ========== دوال إحصائيات شحن النجوم ==========
+def add_star_charge(user_id, username, amount_usd, amount_stars):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    c.execute("INSERT INTO star_charges (user_id, username, amount_usd, amount_stars, charged_at) VALUES (?, ?, ?, ?, ?)",
+              (user_id, username, amount_usd, amount_stars, now))
+    conn.commit()
+    conn.close()
+
+def get_star_charge_stats():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(DISTINCT user_id) FROM star_charges")
+    unique_users = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM star_charges")
+    total_charges = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(amount_stars), 0) FROM star_charges")
+    total_stars = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(amount_usd), 0) FROM star_charges")
+    total_usd = c.fetchone()[0]
+    c.execute("SELECT user_id, username, amount_usd, amount_stars, charged_at FROM star_charges ORDER BY id DESC LIMIT 10")
+    recent = c.fetchall()
+    conn.close()
+    return {
+        'unique_users': unique_users,
+        'total_charges': total_charges,
+        'total_stars': total_stars,
+        'total_usd': total_usd,
+        'recent': recent
+    }
+
+# ========== دوال الإحالة (شارك واربح) ==========
+def get_referral_reward():
+    return float(get_setting('referral_reward', '0.05'))
+
+def set_referral_reward(amount):
+    set_setting('referral_reward', str(amount))
+
+def is_referral_enabled():
+    return get_setting('referral_enabled', '1') == '1'
+
+def get_referral_daily_limit():
+    return int(get_setting('referral_daily_limit', '10'))
+
+def add_referral(referrer_id, referred_id, amount):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.execute("INSERT INTO referrals (referrer_id, referred_id, amount, created_at) VALUES (?, ?, ?, ?)",
+                  (referrer_id, referred_id, amount, now))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def get_user_referrals(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM referrals WHERE referrer_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return {'count': row[0], 'total_earned': row[1]}
+
+def get_daily_referrals(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    today = datetime.now().strftime('%Y-%m-%d')
+    c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND DATE(created_at)=?", (user_id, today))
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+def get_referral_stats():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(DISTINCT referrer_id) FROM referrals")
+    unique_referrers = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM referrals")
+    total_referrals = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM referrals")
+    total_paid = c.fetchone()[0]
+    c.execute("SELECT referrer_id, referred_id, amount, created_at FROM referrals ORDER BY id DESC LIMIT 10")
+    recent = c.fetchall()
+    conn.close()
+    return {
+        'unique_referrers': unique_referrers,
+        'total_referrals': total_referrals,
+        'total_paid': total_paid,
+        'recent': recent
+    }
 
 
-# =========================================================
-# ========== بناء الأزرار =================================
-# =========================================================
-def main_menu(user_id):
-    """القائمة العلوية للبوت"""
-    is_admin_user = is_admin(user_id)
-    buttons = get_all_buttons()
+# ========== دوال تحويل العملات ==========
+def usd_to_stars(usd_amount):
+    rate = get_exchange_rate()
+    return int(usd_amount * rate)
+
+# ========== دوال المستخدمين ==========
+def get_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {'id': row[0], 'user_id': row[1], 'username': row[2], 'first_name': row[3], 
+                'balance_usd': row[4], 'balance_stars': row[5], 'total_spent': row[6], 'orders_count': row[7]}
+    return None
+
+def create_user(user_id, username="", first_name=""):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.execute("INSERT INTO users (user_id, username, first_name, created_at, last_active) VALUES (?, ?, ?, ?, ?)",
+                  (user_id, username, first_name, now, now))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def add_balance_usd(user_id, amount):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance_usd = balance_usd + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+def add_balance_stars(user_id, amount):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance_stars = balance_stars + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+def deduct_balance_usd(user_id, amount):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance_usd = balance_usd - ? WHERE user_id=? AND balance_usd >= ?", (amount, user_id, amount))
+    affected = c.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+def get_all_users():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    total = c.fetchone()[0]
+    c.execute("SELECT user_id, username, first_name, balance_usd, balance_stars, orders_count FROM users ORDER BY id DESC LIMIT 20")
+    rows = c.fetchall()
+    conn.close()
+    return {'total': total, 'users': rows}
+
+def add_admin(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.execute("INSERT INTO admins (user_id, added_at) VALUES (?, ?)", (user_id, now))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def get_all_admins():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM admins")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+    
+# ========== دوال المنتجات ==========
+def add_product(name="", description="", price_usd=0, price_stars=0, category="", code="", stock=1, sale_type="auto", file_id=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if not name:
+            name = f"منتج {datetime.now().strftime('%H:%M')}"
+        if not description:
+            description = "لا يوجد وصف"
+        if not category:
+            category = "عام"
+        if not code:
+            code = "غير محدد"
+        
+        c.execute("INSERT INTO products (name, description, price_usd, price_stars, category, stock, code, sale_type, file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  (name, description, price_usd, price_stars, category, stock, code, sale_type, file_id, now))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def get_available_products():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, name, description, price_usd, price_stars, category, stock, code, sale_type, file_id FROM products WHERE status='available' AND stock > 0 ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [{'id': r[0], 'name': r[1], 'description': r[2], 'price_usd': r[3], 'price_stars': r[4], 'category': r[5], 'stock': r[6], 'code': r[7], 'sale_type': r[8], 'file_id': r[9] if len(r) > 9 else None} for r in rows]
+
+def get_product(product_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM products WHERE id=?", (product_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {'id': row[0], 'name': row[1], 'description': row[2], 'price_usd': row[3], 'price_stars': row[4], 
+                'category': row[5], 'stock': row[6], 'code': row[7], 'status': row[8], 'sale_type': row[9], 
+                'created_at': row[10] if len(row) > 10 else None,
+                'sold_at': row[11] if len(row) > 11 else None,
+                'buyer_id': row[12] if len(row) > 12 else None,
+                'file_id': row[13] if len(row) > 13 else None}
+    return None
+
+def mark_sold(product_id, buyer_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    c.execute("UPDATE products SET status='sold', stock=0, sold_at=?, buyer_id=? WHERE id=?", (now, buyer_id, product_id))
+    conn.commit()
+    conn.close()
+
+def update_stock(product_id, new_stock):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE products SET stock=? WHERE id=?", (new_stock, product_id))
+    conn.commit()
+    conn.close()
+
+def delete_product(product_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM products WHERE id=?", (product_id,))
+    conn.commit()
+    conn.close()
+
+def get_product_count():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM products WHERE status='available' AND stock > 0")
+    available = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM products")
+    total = c.fetchone()[0]
+    conn.close()
+    return {'available': available, 'total': total}
+
+def get_recent_sales(limit=10):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM sales ORDER BY id DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return [{'id': r[0], 'product_id': r[1], 'buyer_id': r[2], 'amount_usd': r[3], 'amount_stars': r[4], 'payment_method': r[5], 'status': r[6], 'sold_at': r[7]} for r in rows]
+
+def add_sale(product_id, buyer_id, amount_usd, amount_stars, payment_method, status="completed"):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    c.execute("INSERT INTO sales (product_id, buyer_id, amount_usd, amount_stars, payment_method, status, sold_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (product_id, buyer_id, amount_usd, amount_stars, payment_method, status, now))
+    conn.commit()
+    conn.close()
+
+def update_sale_status(sale_id, status):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE sales SET status=? WHERE id=?", (status, sale_id))
+    conn.commit()
+    conn.close()
+
+# ========== دوال أسعار الشحن ==========
+def get_charge_prices():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, amount_usd, amount_stars FROM charge_prices WHERE is_active = 1 ORDER BY amount_usd ASC")
+    rows = c.fetchall()
+    conn.close()
+    return [{'id': r[0], 'amount_usd': r[1], 'amount_stars': r[2]} for r in rows]
+
+def add_charge_price(amount_usd, amount_stars):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.execute("INSERT INTO charge_prices (amount_usd, amount_stars, created_at) VALUES (?, ?, ?)",
+                  (amount_usd, amount_stars, now))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def delete_charge_price(price_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE charge_prices SET is_active = 0 WHERE id = ?", (price_id,))
+    conn.commit()
+    conn.close()
+
+def update_charge_price(price_id, amount_usd, amount_stars):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE charge_prices SET amount_usd = ?, amount_stars = ? WHERE id = ?", (amount_usd, amount_stars, price_id))
+    conn.commit()
+    conn.close()
+
+def get_charge_price_by_id(price_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, amount_usd, amount_stars FROM charge_prices WHERE id = ? AND is_active = 1", (price_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {'id': row[0], 'amount_usd': row[1], 'amount_stars': row[2]}
+    return None
+    
+# ========== بناء الأزرار الرئيسية ==========
+def main_menu(is_admin=False):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT button_key, label, style, row, col FROM buttons WHERE is_active = 1 ORDER BY row ASC, col ASC")
+    rows = c.fetchall()
+    conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     row_dict = {}
-    for b in buttons:
-        if not b['is_active']:
-            continue
-        r = b['row']
-        if r not in row_dict:
-            row_dict[r] = []
-        row_dict[r].append(b)
+    
+    for r in rows:
+        key, label, style, row, col = r
+        if row not in row_dict:
+            row_dict[row] = []
+        row_dict[row].append((key, label, style, col))
     
     for row_num in sorted(row_dict.keys()):
+        btn_row = sorted(row_dict[row_num], key=lambda x: x[3])
         btn_list = []
-        for b in sorted(row_dict[row_num], key=lambda x: x['col']):
-            btn_list.append(
-                types.InlineKeyboardButton(b['label'], callback_data=b['button_key'], style=b['style'])
-            )
+        for key, label, style, col in btn_row:
+            btn_list.append(types.InlineKeyboardButton(label, callback_data=key, style=style))
         markup.row(*btn_list)
     
+    
     # زر قناة التفعيل
-    activation = get_activation_channel()
-    if activation:
-        channel_name = activation.replace('@', '')
-        markup.row(types.InlineKeyboardButton(
-            "📢 قناة التفعيل والمشتريات",
-            url=f"https://t.me/{channel_name}",
-            style="primary"
-        ))
+    activation_channel = get_activation_channel()
+    if activation_channel:
+        channel_name = activation_channel.replace('@', '')
+        markup.row(types.InlineKeyboardButton("📢 قناة التفعيل والمشتريات", url=f"https://t.me/{channel_name}", style="primary"))
     
-    # زر الموقع
-    if WEBAPP_URL and not WEBAPP_URL.startswith("http://localhost"):
-        markup.row(types.InlineKeyboardButton(
-            "🌐 فتح الموقع",
-            url=WEBAPP_URL,
-            style="success"
-        ))
-    
-    if is_admin_user:
-        markup.row(types.InlineKeyboardButton(
-            "⚙️ لوحة التحكم",
-            callback_data="admin_panel",
-            style="danger"
-        ))
+    if is_admin:
+        markup.row(types.InlineKeyboardButton("⚙️ لوحة التحكم", callback_data="admin_panel", style="danger"))
     
     return markup
 
-
 def admin_panel_keyboard():
-    """لوحة تحكم الأدمن في البوت"""
     markup = types.InlineKeyboardMarkup(row_width=2)
     
-    markup.add(types.InlineKeyboardButton("➕ إضافة منتج", callback_data="admin_add_product", style="success"))
+    # 1. زر إضافة منتج (أخضر - لوحده)
+    markup.add(
+        types.InlineKeyboardButton("➕ إضافة منتج", callback_data="admin_add_product", style="success")
+    )
+    
+    # 2. الصفوف المتوسطة (أزرق)
     markup.add(
         types.InlineKeyboardButton("📦 المنتجات", callback_data="admin_products", style="primary"),
         types.InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats", style="primary"),
     )
+    
     markup.add(
         types.InlineKeyboardButton("📋 المبيعات", callback_data="admin_sales", style="primary"),
         types.InlineKeyboardButton("💰 شحن رصيد", callback_data="admin_charge", style="primary"),
     )
+    
     markup.add(
         types.InlineKeyboardButton("💱 سعر الصرف", callback_data="admin_exchange", style="primary"),
         types.InlineKeyboardButton("👥 المستخدمين", callback_data="admin_users", style="primary"),
     )
+    
     markup.add(
         types.InlineKeyboardButton("🗑️ حذف منتج", callback_data="admin_delete_product", style="primary"),
         types.InlineKeyboardButton("🎨 تخصيص الأزرار", callback_data="admin_edit_buttons", style="primary"),
     )
+    
+    # 3. الصفوف الأخيرة (أحمر)
     markup.add(
         types.InlineKeyboardButton("💲 أسعار الشحن", callback_data="admin_charge_prices", style="danger"),
         types.InlineKeyboardButton("👑 إدارة المطورين", callback_data="admin_developers", style="danger"),
     )
+    
     markup.add(
         types.InlineKeyboardButton("📢 إدارة القنوات", callback_data="admin_channels", style="danger"),
         types.InlineKeyboardButton("⭐ إحصائيات النجوم", callback_data="admin_star_stats", style="danger"),
     )
-    markup.add(types.InlineKeyboardButton("🎁 إدارة الإحالات", callback_data="admin_referral_panel", style="success"))
-    markup.add(types.InlineKeyboardButton("➕ إضافة قناة", callback_data="add_channel", style="success"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger"))
+    
+    # ✅ زر "🎁 إدارة الإحالات" (جديد - أخضر)
+    markup.add(
+        types.InlineKeyboardButton("🎁 إدارة الإحالات", callback_data="admin_referral_panel", style="success")
+    )
+    
+    # 4. زر إضافة قناة (أخضر - لوحده)
+    markup.add(
+        types.InlineKeyboardButton("➕ إضافة قناة", callback_data="add_channel", style="success")
+    )
+    
+    # 5. زر رجوع (أحمر - لوحده)
+    markup.add(
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")
+    )
     
     return markup
-
 
 def back_admin_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(types.InlineKeyboardButton("🔙 رجوع للوحة التحكم", callback_data="admin_panel", style="danger"))
     return markup
 
+# ========== شارك واربح ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'share_earn')
+def share_earn(call):
+    """عرض رابط الإحالة وإحصائيات المستخدم"""
+    user_id = str(call.from_user.id)
+    user = get_user(user_id)
+    
+    if not user:
+        bot.answer_callback_query(call.id, "❌ حدث خطأ!")
+        return
+    
+    if not is_referral_enabled():
+        bot.answer_callback_query(call.id, "❌ الميزة معطلة حالياً!")
+        return
+    
+    # ✅ رابط الإحالة
+    bot_username = bot.get_me().username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    
+    # ✅ إحصائيات المستخدم
+    stats = get_user_referrals(user_id)
+    daily = get_daily_referrals(user_id)
+    daily_limit = get_referral_daily_limit()
+    reward = get_referral_reward()
+    
+    text = f"""
+🎁 **شارك واربح**
 
-# =========================================================
-# ========== معالجات أوامر البوت ==========================
-# =========================================================
+💡 **كيف يعمل؟**
+1️⃣ انسخ رابطك الخاص
+2️⃣ شاركه مع أصدقائك
+3️⃣ كل صديق ينضم ← تكسب **{reward:.2f}$**
+4️⃣ الأرباح تُضاف لرصيدك فوراً
+
+━━━━━━━━━━━━━━━━━━━━
+
+🔗 **رابطك الخاص:**
+`{referral_link}`
+
+━━━━━━━━━━━━━━━━━━━━
+
+📊 **إحصائياتك:**
+👥 **عدد الإحالات:** {stats['count']}
+💰 **إجمالي الأرباح:** {stats['total_earned']:.2f}$
+📅 **إحالات اليوم:** {daily}/{daily_limit}
+🎯 **المكافأة/صديق:** {reward:.2f}$
+
+━━━━━━━━━━━━━━━━━━━━
+
+👇 **اضغط للنسخ والمشاركة:**
+"""
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📋 نسخ ومشاركة الرابط", url=f"https://t.me/share/url?url={referral_link}&text=انضم%20إلى%20البوت%20الرائع!", style="success")
+    )
+    markup.add(
+        types.InlineKeyboardButton("📊 تفاصيل أكثر", callback_data="share_earn_details", style="primary")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")
+    )
+    
+    bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == 'share_earn_details')
+def share_earn_details(call):
+    """عرض تفاصيل أكثر عن الإحالات"""
+    user_id = str(call.from_user.id)
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT referred_id, amount, created_at FROM referrals WHERE referrer_id=? ORDER BY id DESC LIMIT 10", (user_id,))
+    recent = c.fetchall()
+    conn.close()
+    
+    stats = get_user_referrals(user_id)
+    reward = get_referral_reward()
+    
+    text = f"""
+📊 **تفاصيل الإحالات**
+
+💰 **إجمالي الأرباح:** {stats['total_earned']:.2f}$
+👥 **عدد الإحالات:** {stats['count']}
+🎯 **المكافأة:** {reward:.2f}$ / صديق
+
+━━━━━━━━━━━━━━━━━━━━
+
+📋 **آخر الإحالات:**
+"""
+    
+    if not recent:
+        text += "\n❌ لا توجد إحالات بعد.\n"
+    else:
+        for r in recent:
+            text += f"\n🆔 `{r[0][:10]}...`\n"
+            text += f"💰 {r[1]:.2f}$\n"
+            text += f"🕒 {r[2]}\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="share_earn", style="danger")
+    )
+    
+    bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+# ========== لوحة تحكم الإحالات (أدمن) ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_referral_panel')
+def admin_referral_panel(call):
+    """لوحة تحكم إدارة الإحالات"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    reward = get_referral_reward()
+    enabled = "✅ مفعلة" if is_referral_enabled() else "❌ معطلة"
+    daily_limit = get_referral_daily_limit()
+    
+    stats = get_referral_stats()
+    
+    text = f"""
+🎁 **إدارة الإحالات (شارك واربح)**
+
+━━━━━━━━━━━━━━━━━━━━
+
+⚙️ **الإعدادات الحالية:**
+💰 **المكافأة/صديق:** {reward:.2f}$
+🔘 **الحالة:** {enabled}
+📅 **الحد اليومي:** {daily_limit} صديق
+
+━━━━━━━━━━━━━━━━━━━━
+
+📊 **الإحصائيات:**
+👥 **عدد المُحيلين:** {stats['unique_referrers']}
+🔄 **عدد الإحالات:** {stats['total_referrals']}
+💵 **إجمالي المدفوع:** {stats['total_paid']:.2f}$
+
+━━━━━━━━━━━━━━━━━━━━
+"""
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("💰 تغيير المكافأة", callback_data="admin_ref_set_reward", style="success")
+    )
+    markup.add(
+        types.InlineKeyboardButton("📅 تغيير الحد اليومي", callback_data="admin_ref_set_limit", style="primary")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔄 تفعيل/تعطيل الميزة", callback_data="admin_ref_toggle", style="danger")
+    )
+    markup.add(
+        types.InlineKeyboardButton("📋 آخر الإحالات", callback_data="admin_ref_recent", style="primary")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger")
+    )
+    
+    bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_set_reward')
+def admin_ref_set_reward(call):
+    """تعديل مبلغ المكافأة"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    reward = get_referral_reward()
+    msg = bot.edit_message_text(
+        f"💰 **تغيير مكافأة الإحالة**\n\n"
+        f"المكافأة الحالية: **{reward:.2f}$**\n\n"
+        f"أرسل المكافأة الجديدة (بالدولار):\n"
+        f"مثال: `0.05` أو `0.10`",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(msg, save_referral_reward_step)
+
+def save_referral_reward_step(message):
+    """حفظ المكافأة الجديدة"""
+    try:
+        amount = float(message.text.strip())
+        if amount < 0:
+            bot.send_message(message.chat.id, "❌ **المبلغ يجب أن يكون 0 أو أكبر!**", reply_markup=admin_panel_keyboard())
+            return
+        set_referral_reward(amount)
+        bot.send_message(
+            message.chat.id,
+            f"✅ **تم تحديث المكافأة إلى:** {amount:.2f}$",
+            reply_markup=admin_panel_keyboard()
+        )
+    except:
+        bot.send_message(message.chat.id, "❌ **أدخل رقماً صحيحاً!**", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_set_limit')
+def admin_ref_set_limit(call):
+    """تعديل الحد اليومي"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    current = get_referral_daily_limit()
+    msg = bot.edit_message_text(
+        f"📅 **تغيير الحد اليومي**\n\n"
+        f"الحد الحالي: **{current}** إحالة/يوم\n\n"
+        f"أرسل الحد الجديد (رقم):\n"
+        f"مثال: `10` أو `20` أو `0` (بدون حد)",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(msg, save_referral_limit_step)
+
+def save_referral_limit_step(message):
+    """حفظ الحد اليومي الجديد"""
+    try:
+        limit = int(message.text.strip())
+        if limit < 0:
+            bot.send_message(message.chat.id, "❌ **الحد يجب أن يكون 0 أو أكبر!**", reply_markup=admin_panel_keyboard())
+            return
+        set_setting('referral_daily_limit', str(limit))
+        bot.send_message(
+            message.chat.id,
+            f"✅ **تم تحديث الحد اليومي إلى:** {limit}",
+            reply_markup=admin_panel_keyboard()
+        )
+    except:
+        bot.send_message(message.chat.id, "❌ **أدخل رقماً صحيحاً!**", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_toggle')
+def admin_ref_toggle(call):
+    """تفعيل/تعطيل الميزة"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    new_state = "0" if is_referral_enabled() else "1"
+    set_setting('referral_enabled', new_state)
+    
+    bot.answer_callback_query(call.id, "✅ تم التبديل!")
+    admin_referral_panel(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_recent')
+def admin_ref_recent(call):
+    """عرض آخر الإحالات للأدمن"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    stats = get_referral_stats()
+    
+    text = "📋 **آخر 10 إحالات:**\n\n"
+    
+    if not stats['recent']:
+        text += "❌ لا توجد إحالات بعد."
+    else:
+        for r in stats['recent']:
+            text += f"👤 **المُحيل:** `{r[0][:10]}...`\n"
+            text += f"🆕 **الصديق:** `{r[1][:10]}...`\n"
+            text += f"💰 **المكافأة:** {r[2]:.2f}$\n"
+            text += f"🕒 {r[3]}\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_referral_panel", style="danger")
+    )
+    
+    bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+# ========== أوامر إضافية ==========
+@bot.message_handler(commands=['id'])
+def send_id(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "لا يوجد"
+    first_name = message.from_user.first_name or ""
+    
+    bot.reply_to(
+        message,
+        f"🆔 **معلوماتك:**\n\n"
+        f"👤 الاسم: {first_name}\n"
+        f"🆔 الآيدي: `{user_id}`\n"
+        f"👤 اليوزر: @{username}",
+        parse_mode="Markdown"
+    )
+
+@bot.message_handler(commands=['help'])
+def send_help(message):
+    bot.reply_to(
+        message,
+        f"❓ **المساعدة**\n\n"
+        f"🔹 /start - القائمة الرئيسية\n"
+        f"🔹 /id - عرض آيديك\n"
+        f"🔹 /help - المساعدة\n\n"
+        f"للتواصل: @{DEVELOPER_USERNAME}",
+        parse_mode="Markdown"
+    )
+
+
+# ========== الأوامر ==========
 @bot.message_handler(commands=['start', 'menu'])
 def start_cmd(message):
     user_id = str(message.from_user.id)
+    is_admin = user_id in ADMIN_IDS or user_id in get_all_admins()
     
     # ✅ معالجة الإحالة
     referrer_id = None
@@ -748,9 +1040,10 @@ def start_cmd(message):
         try:
             referrer_id = message.text.split('ref_')[1].strip()
         except:
-            pass
+            referrer_id = None
     
     is_new_user = not get_user(user_id)
+    
     if is_new_user:
         create_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
         
@@ -767,13 +1060,13 @@ def start_cmd(message):
                         try:
                             bot.send_message(
                                 int(referrer_id),
-                                f"🎉 <b>مبروك!</b>\n\n"
+                                f"🎉 **مبروك!**\n\n"
                                 f"👤 صديق جديد انضم عبر رابطك:\n"
-                                f"<b>{message.from_user.first_name}</b>\n\n"
-                                f"💰 <b>ربحت:</b> {reward:.2f}$\n"
-                                f"📊 <b>إحالاتك اليوم:</b> {daily + 1}/{daily_limit}\n"
-                                f"💵 <b>رصيدك الجديد:</b> {get_user(referrer_id)['balance_usd']:.2f}$",
-                                parse_mode="HTML"
+                                f"**{message.from_user.first_name}**\n\n"
+                                f"💰 **ربحت:** {reward:.2f}$\n"
+                                f"📊 **إحالاتك اليوم:** {daily + 1}/{daily_limit}\n"
+                                f"💵 **رصيدك الجديد:** {get_user(referrer_id)['balance_usd']:.2f}$",
+                                parse_mode="Markdown"
                             )
                         except:
                             pass
@@ -798,548 +1091,603 @@ def start_cmd(message):
 <s>━━━━━━━━━━━━━━━━━━━━</s>
 
 <b>🔹 اخـــتـــر مـــن الـــقـــائـــمـــة:</b>
+
+<i>✦ تــمــتــع بــالــتــســوق ✦</i>
 """
     
-    # القائمة السفلية
+        # ✅ القائمة السفلية الثابتة (Reply Keyboard)
     reply_markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     reply_markup.add(
-        KeyboardButton("💰 رصيدي"),
-        KeyboardButton("📋 طلباتي")
+        KeyboardButton("💰 رصيدي", style="success"),
+        KeyboardButton("📋 طلباتي", style="success")
     )
     reply_markup.add(
-        KeyboardButton("💳 شحن رصيد"),
-        KeyboardButton("❓ مساعدة")
+        KeyboardButton("💳 شحن رصيد", style="danger"),
+        KeyboardButton("❓ مساعدة", style="danger")
     )
     reply_markup.add(
-        KeyboardButton("🎁 شارك واربح"),
-        KeyboardButton("🔄 تشغيل البوت")
+        KeyboardButton("🎁 شارك واربح", style="primary"),
+        KeyboardButton("🔄 تشغيل البوت", style="primary")
     )
-    reply_markup.add(KeyboardButton("🌐 الموقع"))
     
     bot.reply_to(message, text, parse_mode="HTML", reply_markup=reply_markup)
     
-    # القائمة العلوية
+    # ✅ القائمة العلوية (Inline)
     bot.send_message(
         message.chat.id,
         "<u><b>🔹 الـــقـــائـــمـــة الـــرئـــيـــســـيـــة 🔹</b></u>",
         parse_mode="HTML",
-        reply_markup=main_menu(user_id)
+        reply_markup=main_menu(is_admin)
     )
 
-
-@bot.message_handler(commands=['id'])
-def send_id(message):
-    bot.reply_to(
-        message,
-        f"🆔 <b>معلوماتك:</b>\n\n"
-        f"👤 <b>الاسم:</b> {message.from_user.first_name}\n"
-        f"🆔 <b>الآيدي:</b> <code>{message.from_user.id}</code>\n"
-        f"👤 <b>اليوزر:</b> @{message.from_user.username or 'لا يوجد'}",
-        parse_mode="HTML"
-    )
-
-
-@bot.message_handler(commands=['help'])
-def send_help(message):
-    bot.reply_to(
-        message,
-        f"❓ <b>المساعدة</b>\n\n"
-        f"🔹 /start - القائمة الرئيسية\n"
-        f"🔹 /id - عرض آيديك\n"
-        f"🔹 /help - المساعدة\n\n"
-        f"🌐 <b>الموقع:</b> {WEBAPP_URL}\n"
-        f"للتواصل: @{DEVELOPER_USERNAME}",
-        parse_mode="HTML"
-    )
-
-
-# =========================================================
-# ========== معالجات القائمة السفلية =====================
-# =========================================================
-@bot.message_handler(func=lambda m: m.text == "💰 رصيدي")
-def btn_balance(message):
-    user = get_user(str(message.from_user.id))
-    if not user:
-        bot.reply_to(message, "❌ حدث خطأ")
-        return
-    bot.reply_to(
-        message,
-        f"💰 <b>رصيدك:</b> <code>{user['balance_usd']:.2f}$</code>\n"
-        f"📦 <b>طلباتك:</b> {user['orders_count']}\n"
-        f"💵 <b>إجمالي المشتريات:</b> {user['total_spent']:.2f}$",
-        parse_mode="HTML"
-    )
-
-
-@bot.message_handler(func=lambda m: m.text == "📋 طلباتي")
-def btn_orders(message):
-    sales = get_user_sales(str(message.from_user.id))
-    if not sales:
-        bot.reply_to(message, "📭 لا توجد طلبات سابقة")
-        return
-    
-    text = "📋 <b>طلباتك:</b>\n\n"
-    for s in sales[:10]:
-        status = "✅ مكتمل" if s['status'] == 'completed' else "⏳ قيد المراجعة" if s['status'] == 'pending' else "❌ مرفوض"
-        text += f"🆔 #{s['id']}\n💵 {s['amount_usd']}$\n📊 {status}\n🕒 {s['sold_at']}\n\n"
-    
-    bot.reply_to(message, text, parse_mode="HTML")
-
-
-@bot.message_handler(func=lambda m: m.text == "❓ مساعدة")
-def btn_help(message):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    if WEBAPP_URL and not WEBAPP_URL.startswith("http://localhost"):
-        markup.add(types.InlineKeyboardButton("🌐 فتح الموقع", url=WEBAPP_URL, style="success"))
-    markup.add(
-        types.InlineKeyboardButton("👨‍💻 المطور", url=f"https://t.me/{DEVELOPER_USERNAME}", style="primary"),
-        types.InlineKeyboardButton("👑 الأدمن", url="https://t.me/E_E_72", style="danger")
-    )
-    bot.reply_to(
-        message,
-        f"❓ <b>المساعدة</b>\n\n🌐 <b>الموقع:</b> {WEBAPP_URL}\n\n👇 <b>للتواصل:</b>",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-
-@bot.message_handler(func=lambda m: m.text == "🎁 شارك واربح")
-def btn_share(message):
-    user_id = str(message.from_user.id)
-    
-    if not is_referral_enabled():
-        bot.reply_to(message, "❌ الميزة معطلة حالياً")
-        return
-    
-    bot_info = bot.get_me()
-    referral_link = f"https://t.me/{bot_info.username}?start=ref_{user_id}"
-    
-    stats = get_user_referrals(user_id)
-    daily = get_daily_referrals(user_id)
-    daily_limit = get_referral_daily_limit()
-    reward = get_referral_reward()
-    
-    text = f"""
-🎁 <b>شارك واربح</b>
-
-💰 <b>المكافأة/صديق:</b> {reward:.2f}$
-👥 <b>إحالاتك:</b> {stats['count']}
-💵 <b>إجمالي الأرباح:</b> {stats['total_earned']:.2f}$
-📅 <b>إحالات اليوم:</b> {daily}/{daily_limit}
-
-🔗 <b>رابطك:</b>
-<code>{referral_link}</code>
-"""
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton(
-        "📤 مشاركة الرابط",
-        url=f"https://t.me/share/url?url={referral_link}&text=انضم!",
-        style="success"
-    ))
-    
-    bot.reply_to(message, text, parse_mode="HTML", reply_markup=markup)
-
-
-@bot.message_handler(func=lambda m: m.text == "🔄 تشغيل البوت")
-def btn_restart(message):
-    start_cmd(message)
-
-
-@bot.message_handler(func=lambda m: m.text == "🌐 الموقع")
-def btn_website(message):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("🌐 فتح الموقع", url=WEBAPP_URL, style="success"))
-    bot.reply_to(
-        message,
-        f"🌐 <b>الموقع الرسمي</b>\n\nاضغط الزر:",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-
-# =========================================================
-# ========== معالجات الأزرار (Callback) ===================
-# =========================================================
+# ========== عرض المنتجات ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'show_products')
-def cb_show_products(call):
+def show_products(call):
     products = get_available_products()
-    user_id = str(call.from_user.id)
+    is_admin = str(call.from_user.id) in ADMIN_IDS or str(call.from_user.id) in get_all_admins()
     
     if not products:
         bot.edit_message_text(
-            "📭 لا توجد منتجات متاحة حالياً.",
-            call.message.chat.id, call.message.message_id,
-            reply_markup=main_menu(user_id)
+            "📭 لا توجد منتجات متاحة حالياً.", 
+            call.message.chat.id, 
+            call.message.message_id, 
+            reply_markup=main_menu(is_admin)
         )
         return
     
-    text = "🛍️ <b>العروض المتاحة</b>\n\n"
+    text = "🛍️ **العروض التي يمكنك شرائها**\n\n"
+    
     markup = types.InlineKeyboardMarkup(row_width=3)
     
-    # عناوين
-    markup.row(
-        types.InlineKeyboardButton("📌 التوفر", callback_data="noop", style="primary"),
-        types.InlineKeyboardButton("📌 الاسم", callback_data="noop", style="success"),
-        types.InlineKeyboardButton("📌 السعر", callback_data="noop", style="danger")
-    )
+    # أزرار العناوين الثابتة
+    title_availability = types.InlineKeyboardButton("📌 التوفر", callback_data="noop", style="primary")
+    title_name = types.InlineKeyboardButton("📌 الاسم", callback_data="noop", style="success")
+    title_price = types.InlineKeyboardButton("📌 السعر", callback_data="noop", style="danger")
+    
+    markup.row(title_availability, title_name, title_price)
     
     for p in products:
-        availability = "♾️ عند طلب" if p['sale_type'] == 'manual' else f"✅ متوفر ({p['stock']})"
-        markup.row(
-            types.InlineKeyboardButton(availability, callback_data=f"buy_{p['id']}", style="primary"),
-            types.InlineKeyboardButton(f"📦 {p['name']}", callback_data=f"product_info_{p['id']}", style="success"),
-            types.InlineKeyboardButton(f"{p['price_usd']}$", callback_data=f"product_info_{p['id']}", style="danger")
+        if p['sale_type'] == 'manual':
+            availability_text = "♾️ عند طلب"
+        else:
+            if p['stock'] > 0:
+                availability_text = "✅ متوفر"
+            else:
+                availability_text = "❌ نفذ"
+        
+        availability_btn = types.InlineKeyboardButton(
+            availability_text,
+            callback_data=f"buy_{p['id']}",
+            style="primary"
         )
+        
+        name_btn = types.InlineKeyboardButton(
+            f"📦 {p['name']}",
+            callback_data=f"product_info_{p['id']}",
+            style="success"
+        )
+        
+        price_btn = types.InlineKeyboardButton(
+            f"{p['price_usd']}$",
+            callback_data=f"product_info_{p['id']}",
+            style="danger"
+        )
+        
+        markup.row(availability_btn, name_btn, price_btn)
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger"))
+    markup.add(
+        types.InlineKeyboardButton("🔍 بحث عن سلعة", callback_data="search_product", style="primary")
+    )
+    
+    markup.add(
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")
+    )
     
     bot.edit_message_text(
-        text, call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
     )
 
-
+# ========== دالة منع الضغط على أزرار العناوين ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'noop')
-def cb_noop(call):
-    bot.answer_callback_query(call.id, "هذا زر عنوان فقط")
+def noop(call):
+    bot.answer_callback_query(call.id, "هذا زر عنوان فقط!")
 
-
+# ========== عرض تفاصيل المنتج ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('product_info_'))
-def cb_product_info(call):
-    pid = int(call.data.split('_')[2])
-    p = get_product(pid)
-    if not p:
-        bot.answer_callback_query(call.id, "❌ المنتج غير موجود")
+def product_info(call):
+    product_id = int(call.data.split('_')[2])
+    product = get_product(product_id)
+    
+    if not product:
+        bot.answer_callback_query(call.id, "❌ المنتج غير موجود!")
         return
     
     user = get_user(str(call.from_user.id))
     
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton(
-        f"💳 شراء ({p['price_usd']}$)",
-        callback_data=f"pay_usd_{pid}",
-        style="success"
-    ))
+    markup.add(
+        types.InlineKeyboardButton(f"💳 دولار ({product['price_usd']}$)", callback_data=f"pay_usd_{product_id}", style="success")
+    )
     markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_products", style="primary"))
     
     bot.edit_message_text(
-        f"💳 <b>تأكيد الشراء</b>\n\n"
-        f"📦 <b>المنتج:</b> {p['name']}\n"
-        f"📝 {p['description']}\n"
-        f"💰 <b>السعر:</b> {p['price_usd']}$\n"
-        f"💵 <b>رصيدك:</b> {user['balance_usd']:.2f}$",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
+        f"💳 **تأكيد الشراء**\n\n"
+        f"📦 **المنتج:** {product['name']}\n"
+        f"📝 {product['description']}\n"
+        f"💰 {product['price_usd']}$\n"
+        f"💵 رصيدك بالدولار: {user['balance_usd']:.2f}$\n\n"
+        f"اختر طريقة الدفع:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
     )
-
-
+    
+# ========== الشراء والدفع ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_'))
-def cb_buy(call):
-    pid = int(call.data.split('_')[1])
-    p = get_product(pid)
-    if not p or p['status'] != 'available' or p['stock'] <= 0:
-        bot.answer_callback_query(call.id, "❌ غير متوفر")
+def buy_callback(call):
+    """عرض تفاصيل المنتج وتأكيد الشراء"""
+    product_id = int(call.data.split('_')[1])
+    product = get_product(product_id)
+    
+    if not product or product['status'] == 'sold' or product['stock'] <= 0:
+        bot.answer_callback_query(call.id, "❌ هذا المنتج غير متوفر!")
         return
     
-    user = get_user(str(call.from_user.id))
+    user_id = str(call.from_user.id)
+    user = get_user(user_id)
     
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton(
-        f"💳 شراء ({p['price_usd']}$)",
-        callback_data=f"pay_usd_{pid}",
-        style="success"
-    ))
+    markup.add(
+        types.InlineKeyboardButton(f"💳 دولار ({product['price_usd']}$)", callback_data=f"pay_usd_{product_id}", style="success")
+    )
     markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="show_products", style="primary"))
     
     bot.edit_message_text(
-        f"💳 <b>تأكيد الشراء</b>\n\n"
-        f"📦 <b>المنتج:</b> {p['name']}\n"
-        f"💰 <b>السعر:</b> {p['price_usd']}$\n"
-        f"💵 <b>رصيدك:</b> {user['balance_usd']:.2f}$",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
+        f"💳 **تأكيد الشراء**\n\n"
+        f"📦 **المنتج:** {product['name']}\n"
+        f"📝 {product['description']}\n"
+        f"💰 {product['price_usd']}$\n"
+        f"💵 رصيدك بالدولار: {user['balance_usd']:.2f}$\n\n"
+        f"اختر طريقة الدفع:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
     )
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_usd_'))
-def cb_pay_usd(call):
-    pid = int(call.data.split('_')[2])
-    p = get_product(pid)
+def pay_usd(call):
+    """خصم المبلغ من رصيد المستخدم وإتمام الشراء"""
+    product_id = int(call.data.split('_')[2])
+    product = get_product(product_id)
     user_id = str(call.from_user.id)
     
-    if not p or p['status'] != 'available' or p['stock'] <= 0:
-        bot.answer_callback_query(call.id, "❌ غير متوفر")
+    if not product or product['status'] == 'sold' or product['stock'] <= 0:
+        bot.answer_callback_query(call.id, "❌ غير متوفر!")
         return
     
     user = get_user(user_id)
-    if not user or user['balance_usd'] < p['price_usd']:
-        bot.answer_callback_query(call.id, f"❌ رصيدك غير كافٍ")
+    if not user or user['balance_usd'] < product['price_usd']:
+        bot.answer_callback_query(call.id, f"❌ رصيدك بالدولار غير كافٍ!\n💵 رصيدك: {user['balance_usd']:.2f}$")
         return
     
-    if deduct_balance_usd(user_id, p['price_usd']):
-        process_purchase(pid, user_id, call, "دولار")
+    if deduct_balance_usd(user_id, product['price_usd']):
+        process_purchase(product_id, user_id, call, "دولار")
 
-
-def process_purchase(pid, user_id, call, method):
-    p = get_product(pid)
-    user = get_user(user_id)
+def process_purchase(product_id, user_id, call, method):
+    """معالجة عملية الشراء (يدوي أو تلقائي) وإرسال المنتج للمشتري"""
+    product = get_product(product_id)
     
-    if p['sale_type'] == 'manual':
-        # بيع يدوي
-        sale_id = add_sale(pid, user_id, p['price_usd'], 0, method, "pending")
+    if product['sale_type'] == 'manual':
+        # ===== بيع يدوي =====
+        sale_id = add_sale(product_id, user_id, product['price_usd'], product['price_stars'], method, status="pending")
         
         bot.edit_message_text(
-            f"⏳ <b>طلبك قيد المراجعة!</b>\n\n"
-            f"📦 <b>المنتج:</b> {p['name']}\n"
-            f"💰 <b>السعر:</b> {p['price_usd']}$\n"
-            f"🔔 سيتم التسليم بعد تأكيد الأدمن",
-            call.message.chat.id, call.message.message_id,
-            parse_mode="HTML"
+            f"⏳ **طلبك قيد المراجعة!**\n\n"
+            f"📦 **المنتج:** {product['name']}\n"
+            f"💰 **السعر:** {product['price_usd']}$\n"
+            f"💳 **طريقة الدفع:** {method}\n\n"
+            f"🔔 **سيتم تسليم المنتج بعد تأكيد صاحب البوت @{DEVELOPER_USERNAME}**\n"
+            f"📢 **تابع قناة التفعيل لمتابعة طلبك**",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
         )
         
-        # إشعار الأدمن
         for admin_id in ADMIN_IDS:
             try:
                 markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
-                    types.InlineKeyboardButton("✅ تأكيد",
-                        callback_data=f"confirm_sale_{pid}_{user_id}_{method}_{sale_id}",
-                        style="success"),
-                    types.InlineKeyboardButton("❌ رفض",
-                        callback_data=f"reject_sale_{pid}_{user_id}_{method}_{sale_id}",
-                        style="danger")
+                    types.InlineKeyboardButton("✅ تأكيد البيع", callback_data=f"confirm_sale_{product_id}_{user_id}_{method}_{sale_id}", style="success"),
+                    types.InlineKeyboardButton("❌ رفض", callback_data=f"reject_sale_{product_id}_{user_id}_{method}_{sale_id}", style="danger")
                 )
                 bot.send_message(
                     admin_id,
-                    f"🤝 <b>طلب بيع يدوي!</b>\n\n"
-                    f"📦 {p['name']}\n"
-                    f"👤 {get_user_mention(user_id, call.from_user.first_name)}\n"
-                    f"💰 {p['price_usd']}$",
-                    parse_mode="HTML", reply_markup=markup
+                    f"🤝 <b>طلب بيع يدوي جديد!</b>\n\n"
+                    f"📦 <b>المنتج:</b> {product['name']}\n"
+                    f"👤 <b>المشتري:</b> {get_user_mention(user_id, call.from_user.first_name)}\n"
+                    f"🆔 <b>المعرف:</b> {get_username(user_id, call.from_user.username)}\n"
+                    f"💰 <b>السعر:</b> {product['price_usd']}$\n"
+                    f"💳 <b>طريقة الدفع:</b> {method}\n\n"
+                    f"اضغط تأكيد لتسليم المنتج:",
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+            except:
+                pass
+        
+        channel_id = get_activation_channel()
+        if channel_id:
+            try:
+                bot.send_message(
+                    channel_id,
+                    f"<b>🛒✦┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✦</b>\n"
+                    f"<b>✨ حـــديـــث شـــراء ✨</b>\n"
+                    f"<b>✦┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✦</b>\n\n"
+                    f"<b>👤 المشتري:</b> {get_user_mention(user_id, call.from_user.first_name)}\n"
+                    f"<b>🆔 المعرف:</b> {get_username(user_id, call.from_user.username)}\n"
+                    f"<b>📦 المنتج:</b> {product['name']}\n"
+                    f"<b>💰 السعر:</b> {product['price_usd']}$\n"
+                    f"<b>💳 طريقة الدفع:</b> {method}\n"
+                    f"<b>🕒 الوقت:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                    f"<b>✦┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✦</b>",
+                    parse_mode="HTML",
+                    reply_markup=types.InlineKeyboardMarkup(row_width=1).add(
+                        types.InlineKeyboardButton("🔙 العودة إلى البوت", url=f"https://t.me/{bot.get_me().username}", style="primary")
+                    )
                 )
             except:
                 pass
     else:
-        # بيع تلقائي
-        new_stock = p['stock'] - 1
+        # ===== بيع تلقائي =====
+        new_stock = product['stock'] - 1
         if new_stock <= 0:
-            mark_sold(pid, user_id)
+            mark_sold(product_id, user_id)
         else:
-            update_stock(pid, new_stock)
+            update_stock(product_id, new_stock)
         
-        add_sale(pid, user_id, p['price_usd'], 0, method, "completed")
+        add_sale(product_id, user_id, product['price_usd'], product['price_stars'], method, status="completed")
         
-        with db() as conn:
-            conn.execute(
-                "UPDATE users SET orders_count=orders_count+1, total_spent=total_spent+? WHERE user_id=?",
-                (p['price_usd'], user_id)
-            )
-            conn.commit()
-        
-        # رسالة النجاح
-        success_text = (
-            f"✅ <b>تم الشراء بنجاح!</b>\n\n"
-            f"📦 <b>المنتج:</b> {p['name']}\n"
-            f"🔑 <b>الكود:</b> <code>{p['code']}</code>\n"
-            f"💰 {p['price_usd']}$"
-        )
+        # 1. رسالة النجاح للمشتري
         try:
             bot.edit_message_text(
-                success_text, call.message.chat.id, call.message.message_id,
-                parse_mode="HTML"
+                f"✅ **تم الشراء بنجاح!**\n\n"
+                f"📦 **المنتج:** {product['name']}\n"
+                f"🔑 **الكود:** `{product['code']}`\n"
+                f"💵 {product['price_usd']}$\n"
+                f"💳 طريقة الدفع: {method}",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown"
             )
         except:
-            bot.send_message(call.message.chat.id, success_text, parse_mode="HTML")
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ **تم الشراء بنجاح!**\n\n"
+                f"📦 **المنتج:** {product['name']}\n"
+                f"🔑 **الكود:** `{product['code']}`\n"
+                f"💵 {product['price_usd']}$\n"
+                f"💳 طريقة الدفع: {method}",
+                parse_mode="Markdown"
+            )
         
-        # إرسال الملف
-        if p.get('file_id'):
+        # 2. إرسال الملف للمشتري (إذا وجد) - مع تنظيف قوي لـ file_id
+        if product.get('file_id'):
+            import re
+            file_id = str(product['file_id']).strip()
+            file_id = re.sub(r'[^A-Za-z0-9_\-]', '', file_id)
+            caption_text = f"📎 ملف المنتج: {product['name']}"
+            
+            print(f"DEBUG: file_id = {file_id}")
+            print(f"DEBUG: chat_id = {call.from_user.id}")
+            
+            # محاولة إرسال كصورة أولاً
             try:
-                bot.send_document(
-                    call.from_user.id, p['file_id'],
-                    caption=f"📎 ملف المنتج: {p['name']}"
+                bot.send_photo(
+                    call.from_user.id,
+                    file_id,
+                    caption=caption_text
+                )
+                print(f"DEBUG: ✅ تم إرسال الملف كصورة")
+            except Exception as e1:
+                print(f"DEBUG: ❌ فشل كصورة: {e1}")
+                # محاولة إرسال كمستند
+                try:
+                    bot.send_document(
+                        call.from_user.id,
+                        file_id,
+                        caption=caption_text
+                    )
+                    print(f"DEBUG: ✅ تم إرسال الملف كمستند")
+                except Exception as e2:
+                    print(f"DEBUG: ❌ فشل كمستند: {e2}")
+                    # محاولة إرسال كفيديو
+                    try:
+                        bot.send_video(
+                            call.from_user.id,
+                            file_id,
+                            caption=caption_text
+                        )
+                        print(f"DEBUG: ✅ تم إرسال الملف كفيديو")
+                    except Exception as e3:
+                        print(f"DEBUG: ❌ فشل كفيديو: {e3}")
+        
+        # 3. إرسال للقناة
+        channel_id = get_activation_channel()
+        if channel_id:
+            try:
+                bot.send_message(
+                    channel_id,
+                    f"<b>🛒✦┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✦</b>\n"
+                    f"<b>✨ حـــديـــث شـــراء ✨</b>\n"
+                    f"<b>✦┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✦</b>\n\n"
+                    f"<b>👤 المشتري:</b> {get_user_mention(user_id, call.from_user.first_name)}\n"
+                    f"<b>🆔 المعرف:</b> {get_username(user_id, call.from_user.username)}\n"
+                    f"<b>📦 المنتج:</b> {product['name']}\n"
+                    f"<b>🔑 الكود:</b> <code>{product['code']}</code>\n"
+                    f"<b>💰 السعر:</b> {product['price_usd']}$\n"
+                    f"<b>💳 طريقة الدفع:</b> {method}\n"
+                    f"<b>🕒 الوقت:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                    f"<b>✦┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✦</b>",
+                    parse_mode="HTML",
+                    reply_markup=types.InlineKeyboardMarkup(row_width=1).add(
+                        types.InlineKeyboardButton("🔙 العودة إلى البوت", url=f"https://t.me/{bot.get_me().username}", style="primary")
+                    )
                 )
             except:
-                try:
-                    bot.send_photo(
-                        call.from_user.id, p['file_id'],
-                        caption=f"📎 صورة المنتج: {p['name']}"
-                    )
-                except:
-                    pass
-
-
+                pass
+        
+        # 4. إشعار للأدمن
+        for admin_id in ADMIN_IDS:
+            try:
+                bot.send_message(
+                    admin_id, 
+                    f"💰 <b>بيع جديد!</b>\n\n"
+                    f"👤 {get_user_mention(user_id, call.from_user.first_name)}\n"
+                    f"📦 {product['name']}\n"
+                    f"💵 {product['price_usd']}$",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+                
+# ========== تأكيد/رفض البيع اليدوي ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_sale_'))
-def cb_confirm_sale(call):
+def confirm_sale(call):
+    # 1. التحقق من صلاحيات المستخدم (هل هو أدمن؟)
     user_id = str(call.from_user.id)
-    if not is_admin(user_id):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
+    # 2. استخراج بيانات المعاملة من الزر (Callback Data)
     parts = call.data.split('_')
-    pid = int(parts[2])
+    product_id = int(parts[2])
     buyer_id = parts[3]
     method = parts[4]
     sale_id = int(parts[5])
     
-    p = get_product(pid)
-    if not p:
-        bot.answer_callback_query(call.id, "❌ المنتج غير موجود")
+    # 3. جلب معلومات المنتج من قاعدة البيانات
+    product = get_product(product_id)
+    if not product:
+        bot.answer_callback_query(call.id, "❌ المنتج غير موجود!")
         return
     
-    new_stock = p['stock'] - 1
+    # 4. تحديث المخزون (خصم قطعة واحدة)
+    new_stock = product['stock'] - 1
     if new_stock <= 0:
-        mark_sold(pid, buyer_id)
+        mark_sold(product_id, buyer_id)
     else:
-        update_stock(pid, new_stock)
+        update_stock(product_id, new_stock)
     
+    # 5. تحديث حالة البيع إلى "مكتمل"
     update_sale_status(sale_id, "completed")
     
+    # 6. إرسال رسالة تفاصيل الطلب للمشتري أولاً
     try:
         bot.send_message(
             int(buyer_id),
-            f"✅ <b>تم تأكيد طلبك!</b>\n\n"
-            f"📦 {p['name']}\n"
-            f"🔑 <code>{p.get('code', 'لا يوجد')}</code>\n"
-            f"💰 {p.get('price_usd', 0)}$",
-            parse_mode="HTML"
+            f"✅ **تم تأكيد طلبك وتسليم المنتج!**\n\n"
+            f"📦 **المنتج:** {product['name']}\n"
+            f"🔑 **الكود:** `{product.get('code', 'لا يوجد')}`\n"
+            f"💰 **السعر:** {product.get('price_usd', 0)}$\n"
+            f"💳 **طريقة الدفع:** {method}\n\n"
+            f"👨‍💻 **تم التأكيد بواسطة:** @{DEVELOPER_USERNAME}",
+            parse_mode="Markdown"
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"DEBUG: ❌ فشل إرسال رسالة النص للمشتري: {e}")
+
+    # 7. تسليم الملف أو المرفق بشكل ذكي وآمن تماماً (بدون توقف البوت)
+    file_id = product.get('file_id')
+    if file_id and str(file_id).strip() != "" and str(file_id).strip() != "None":
+        file_str = str(file_id).strip()
+        sent_successfully = False
+        
+        # أ) إذا كان مسار محلي في الذاكرة
+        if file_str.startswith('/'):
+            try:
+                with open(file_str, 'rb') as f:
+                    bot.send_document(int(buyer_id), f, caption=f"📎 ملف المنتج: {product['name']}")
+                sent_successfully = True
+            except Exception as local_err:
+                print(f"DEBUG: فشل الملف المحلي: {local_err}")
+        
+        # ب) إذا كان معرف تيليجرام (File ID) كمستند
+        if not sent_successfully:
+            try:
+                bot.send_document(int(buyer_id), file_str, caption=f"📎 ملف المنتج: {product['name']}")
+                sent_successfully = True
+            except Exception:
+                pass
+                
+        # ج) محاولة كصورة إذا فشل كمستند
+        if not sent_successfully:
+            try:
+                bot.send_photo(int(buyer_id), file_str, caption=f"📎 صورة المنتج: {product['name']}")
+                sent_successfully = True
+            except Exception:
+                pass
+                
+        # د) محاولة كفيديو كحل أخير
+        if not sent_successfully:
+            try:
+                bot.send_video(int(buyer_id), file_str, caption=f"📎 فيديو المنتج: {product['name']}")
+                sent_successfully = True
+            except Exception as final_err:
+                print(f"DEBUG: ❌ تعذر إرسال المرفق نهائياً: {final_err}")
+                try:
+                    bot.send_message(int(buyer_id), "⚠️ عذراً، ملف المنتج تالف أو غير مدعوم، تواصل مع الدعم الفني لاستلامه يدوياً.")
+                except:
+                    pass
+
+    # 8. إشعار الأدمن بأن العملية تمت بنجاح
+    bot.answer_callback_query(call.id, "✅ تم تأكيد البيع وإرسال الطلب بنجاح!")
+
     
-    if p.get('file_id'):
+    channel_id = get_activation_channel()
+    if channel_id:
         try:
-            bot.send_document(int(buyer_id), p['file_id'],
-                            caption=f"📎 ملف المنتج: {p['name']}")
+            bot.send_message(
+                channel_id,
+                f"✅ **تم تأكيد البيع وتسليم المنتج!**\n\n"
+                f"📦 المنتج: {product['name']}\n"
+                f"🔑 الكود: `{product['code']}`\n"
+                f"💰 السعر: {product['price_usd']}$\n"
+                f"💳 طريقة الدفع: {method}\n"
+                f"👨‍💻 المطور: @{DEVELOPER_USERNAME}\n"
+                f"🕒 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                parse_mode="Markdown"
+            )
         except:
             pass
     
-    bot.answer_callback_query(call.id, "✅ تم التأكيد")
-    bot.edit_message_text("✅ <b>تم تأكيد البيع!</b>",
-                         call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML")
-
+    bot.answer_callback_query(call.id, "✅ تم تأكيد البيع وتسليم المنتج!")
+    bot.edit_message_text("✅ **تم تأكيد البيع!**", call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_sale_'))
-def cb_reject_sale(call):
+def reject_sale(call):
     user_id = str(call.from_user.id)
-    if not is_admin(user_id):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
     parts = call.data.split('_')
-    pid = int(parts[2])
+    product_id = int(parts[2])
     buyer_id = parts[3]
     sale_id = int(parts[5])
     
-    p = get_product(pid)
-    if p:
-        add_balance_usd(buyer_id, p['price_usd'])
+    product = get_product(product_id)
+    if product:
+        add_balance_usd(buyer_id, product['price_usd'])
         update_sale_status(sale_id, "rejected")
         
         try:
             bot.send_message(
                 buyer_id,
-                f"❌ <b>تم رفض طلبك</b>\n\n"
-                f"📦 {p['name']}\n"
-                f"💰 تم إرجاع المبلغ",
-                parse_mode="HTML"
+                f"❌ **تم رفض طلبك!**\n\n"
+                f"📦 **المنتج:** {product['name']}\n"
+                f"💰 **تم إرجاع المبلغ إلى رصيدك**\n\n"
+                f"👨‍💻 **للتواصل مع الدعم:** @{DEVELOPER_USERNAME}",
+                parse_mode="Markdown"
             )
         except:
             pass
     
-    bot.answer_callback_query(call.id, "❌ تم الرفض")
-    bot.edit_message_text("❌ <b>تم رفض الطلب</b>",
-                         call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML")
+    bot.answer_callback_query(call.id, "❌ تم رفض الطلب وإرجاع المبلغ!")
+    bot.edit_message_text("❌ **تم رفض الطلب!**", call.message.chat.id, call.message.message_id)
 
-
+# ========== رصيدي ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'my_balance')
-def cb_my_balance(call):
+def my_balance(call):
     user = get_user(str(call.from_user.id))
-    bot.edit_message_text(
-        f"💰 <b>رصيدك:</b> <code>{user['balance_usd']:.2f}$</code>\n"
-        f"📦 <b>طلباتك:</b> {user['orders_count']}",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=main_menu(str(call.from_user.id))
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'my_orders')
-def cb_my_orders(call):
-    sales = get_user_sales(str(call.from_user.id))
-    if not sales:
-        bot.edit_message_text("📭 لا توجد طلبات",
-                             call.message.chat.id, call.message.message_id,
-                             reply_markup=main_menu(str(call.from_user.id)))
+    if not user:
+        bot.answer_callback_query(call.id, "❌ حدث خطأ!")
         return
     
-    text = "📋 <b>طلباتك:</b>\n\n"
-    for s in sales[:10]:
-        status = "✅" if s['status'] == 'completed' else "⏳" if s['status'] == 'pending' else "❌"
-        text += f"{status} #{s['id']} - {s['amount_usd']}$\n"
+    text = f"""
+💰 **رصيدك الحالي:**
+
+💵 {user['balance_usd']:.2f}$
+
+📊 **إحصائياتك:**
+📦 عدد الطلبات: {user['orders_count']}
+💵 إجمالي المشتريات: {user['total_spent']:.2f}$
+"""
+    bot.edit_message_text(
+        text, 
+        call.message.chat.id, 
+        call.message.message_id, 
+        parse_mode="Markdown", 
+        reply_markup=main_menu(str(call.from_user.id) in ADMIN_IDS or str(call.from_user.id) in get_all_admins())
+    )
     
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=main_menu(str(call.from_user.id)))
-
-
+# ========== شحن الرصيد ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'charge_balance')
-def cb_charge_balance(call):
+def charge_balance(call):
     prices = get_charge_prices()
     if not prices:
-        bot.answer_callback_query(call.id, "❌ لا توجد أسعار")
+        bot.edit_message_text(
+            "❌ **لا توجد أسعار شحن متاحة.**", 
+            call.message.chat.id, 
+            call.message.message_id, 
+            reply_markup=main_menu(str(call.from_user.id) in ADMIN_IDS or str(call.from_user.id) in get_all_admins())
+        )
         return
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     for p in prices:
         markup.add(types.InlineKeyboardButton(
-            f"💵 {p['amount_usd']}$ = ⭐ {p['amount_stars']}",
+            f"💵 {p['amount_usd']}$ = ⭐ {p['amount_stars']}", 
             callback_data=f"charge_{p['amount_usd']}_{p['amount_stars']}",
             style="success" if p['amount_usd'] <= 5 else "primary"
         ))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="my_balance", style="danger"))
     
     rate = get_exchange_rate()
     bot.edit_message_text(
-        f"💳 <b>شحن الرصيد</b>\n\n"
-        f"💱 سعر الصرف: 1$ = {rate} ⭐\n\n"
-        f"اختر المبلغ:",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
+        f"💳 **شحن الرصيد**\n\n"
+        f"💱 سعر الصرف: 1$ = {rate} ⭐\n"
+        f"🪙 1 سنت = {rate/100:.2f} نجمة\n\n"
+        f"اختر المبلغ المناسب:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
     )
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('charge_'))
-def cb_process_charge(call):
+def process_charge(call):
     parts = call.data.split('_')
-    amount_usd = float(parts[1])
-    amount_stars = int(parts[2])
+    if len(parts) == 3:
+        amount_usd = float(parts[1])
+        amount_stars = int(parts[2])
+    else:
+        amount_usd = float(parts[1])
+        rate = get_exchange_rate()
+        amount_stars = int(amount_usd * rate)
+    
     user_id = str(call.from_user.id)
     
-    try:
-        bot.send_invoice(
-            call.message.chat.id,
-            title=f"💳 شحن {amount_usd}$",
-            description=f"شحن {amount_usd}$ = {amount_stars} نجمة",
-            invoice_payload=json.dumps({
-                'type': 'charge',
-                'amount_usd': amount_usd,
-                'amount_stars': amount_stars,
-                'user_id': user_id
-            }),
-            provider_token="",
-            currency="XTR",
-            prices=[types.LabeledPrice("⭐", amount_stars)],
-            start_parameter="charge"
-        )
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"❌ خطأ: {e}")
+    bot.send_invoice(
+        call.message.chat.id,
+        title=f"💳 شحن {amount_usd}$",
+        description=f"شحن {amount_usd}$ إلى رصيدك\n⭐ {amount_stars} نجمة = {amount_usd}$",
+        invoice_payload=json.dumps({'type': 'charge', 'amount_usd': amount_usd, 'amount_stars': amount_stars, 'user_id': user_id}),
+        provider_token="",
+        currency="XTR",
+        prices=[types.LabeledPrice("⭐", amount_stars)],
+        start_parameter="charge"
+    )
 
-
-@bot.pre_checkout_query_handler(func=lambda q: True)
-def pre_checkout(q):
-    bot.answer_pre_checkout_query(q.id, True)
-
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def pre_checkout(pre_checkout_query):
+    bot.answer_pre_checkout_query(pre_checkout_query.id, True)
 
 @bot.message_handler(content_types=['successful_payment'])
 def successful_payment(message):
@@ -1352,1612 +1700,1405 @@ def successful_payment(message):
             
             add_balance_usd(user_id, amount_usd)
             add_balance_stars(user_id, amount_stars)
+            
+            # تسجيل الشحن في جدول إحصائيات النجوم
             add_star_charge(user_id, message.from_user.username or "", amount_usd, amount_stars)
             
             user = get_user(user_id)
             bot.send_message(
-                message.chat.id,
-                f"✅ <b>تم شحن رصيدك!</b>\n\n"
+                message.chat.id, 
+                f"✅ **تم شحن رصيدك بنجاح!**\n\n"
                 f"⭐ {amount_stars} نجمة\n"
                 f"💵 {amount_usd}$\n"
-                f"💰 <b>رصيدك:</b> {user['balance_usd']:.2f}$",
-                parse_mode="HTML"
+                f"💰 رصيدك الحالي: {user['balance_usd']:.2f}$", 
+                parse_mode="Markdown"
             )
+            
+            channel_id = get_activation_channel()
+            if channel_id:
+                try:
+                    bot.send_message(
+                        channel_id,
+                        f"💳 **شحن رصيد جديد!**\n\n"
+                        f"👤 المستخدم: {message.from_user.first_name}\n"
+                        f"🆔 المعرف: @{message.from_user.username or 'لا يوجد'}\n"
+                        f"💰 المبلغ: {amount_usd}$\n"
+                        f"⭐ النجوم: {amount_stars}\n"
+                        f"🕒 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
     except Exception as e:
         logger.error(f"Payment error: {e}")
 
-
+# ========== طلباتي ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'my_orders')
+def my_orders(call):
+    sales = get_recent_sales(10)
+    user_sales = [s for s in sales if s['buyer_id'] == str(call.from_user.id)]
+    
+    if not user_sales:
+        bot.edit_message_text(
+            "📭 **لا توجد طلبات سابقة.**", 
+            call.message.chat.id, 
+            call.message.message_id, 
+            parse_mode="Markdown", 
+            reply_markup=main_menu(str(call.from_user.id) in ADMIN_IDS or str(call.from_user.id) in get_all_admins())
+        )
+        return
+    
+    text = "📋 **طلباتي السابقة:**\n\n"
+    for s in user_sales:
+        status_text = "✅ مكتمل" if s['status'] == 'completed' else "⏳ قيد المراجعة" if s['status'] == 'pending' else "❌ مرفوض"
+        text += f"🆔 #{s['id']}\n"
+        text += f"💵 {s['amount_usd']}$\n"
+        text += f"💳 {s['payment_method']}\n"
+        text += f"📊 الحالة: {status_text}\n"
+        text += f"🕒 {s['sold_at']}\n\n"
+    
+    bot.edit_message_text(
+        text, 
+        call.message.chat.id, 
+        call.message.message_id, 
+        parse_mode="Markdown", 
+        reply_markup=main_menu(str(call.from_user.id) in ADMIN_IDS or str(call.from_user.id) in get_all_admins())
+    )
+    
+# ========== الدعم ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'support')
-def cb_support(call):
+def support(call):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("👨‍💻 المطور", url=f"https://t.me/{DEVELOPER_USERNAME}", style="primary"),
-        types.InlineKeyboardButton("👑 الأدمن", url="https://t.me/E_E_72", style="danger"),
+        types.InlineKeyboardButton("👑 الأدمن", url=f"https://t.me/E_E_72", style="danger"),
         types.InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")
     )
-    bot.edit_message_text(
-        "📞 <b>الدعم الفني</b>\n\n👇 اضغط للتواصل:",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'back_main')
-def cb_back_main(call):
-    user_id = str(call.from_user.id)
-    store_name = get_setting('store_name', '🛍️ متجر الأرقام')
-    user = get_user(user_id)
-    bot.edit_message_text(
-        f"<b>{store_name}</b>\n\n"
-        f"💰 رصيدك: {user['balance_usd']:.2f}$\n"
-        f"📦 المنتجات: {get_product_count()['available']}",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=main_menu(user_id)
-    )
-
-
-# =========================================================
-# ========== لوحة تحكم الأدمن ============================
-# =========================================================
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_panel')
-def cb_admin_panel(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    stats = get_product_count()
-    bot.edit_message_text(
-        f"⚙️ <b>لوحة التحكم</b>\n\n"
-        f"📦 المتاحة: {stats['available']}\n"
-        f"📦 الإجمالي: {stats['total']}\n"
-        f"💱 سعر الصرف: {get_exchange_rate()} ⭐ = 1$\n\n"
-        f"🔹 اختر الإجراء:",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=admin_panel_keyboard()
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_stats')
-def cb_admin_stats(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    stats = get_product_count()
-    rate = get_exchange_rate()
-    users_count = count_users()
     
     bot.edit_message_text(
-        f"📊 <b>الإحصائيات</b>\n\n"
-        f"📦 المتاحة: {stats['available']}\n"
-        f"📦 الإجمالي: {stats['total']}\n"
-        f"👥 المستخدمين: {users_count}\n"
-        f"💱 سعر الصرف: {rate} ⭐ = 1$",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=back_admin_keyboard()
+        "📞 **الدعم الفني**\n\n"
+        "للتواصل مع الدعم الفني:\n"
+        f"👨‍💻 **المطور:** @{DEVELOPER_USERNAME}\n"
+        f"👑 **الأدمن:** @E_E_72\n\n"
+        "اضغط على الزر للتواصل مباشرة:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
     )
 
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_products')
-def cb_admin_products(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    products = get_available_products()
-    if not products:
-        bot.edit_message_text("📭 لا توجد منتجات",
-                             call.message.chat.id, call.message.message_id,
-                             reply_markup=back_admin_keyboard())
-        return
-    
-    text = "📦 <b>المنتجات:</b>\n\n"
-    for p in products[:15]:
-        st = "⚡" if p['sale_type'] == 'auto' else "🤝"
-        text += f"🆔 {p['id']} | {st} {p['name']}\n💰 {p['price_usd']}$ | 📦 {p['stock']}\n\n"
-    
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=back_admin_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_users')
-def cb_admin_users(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    data = get_all_users()
-    text = f"👥 <b>المستخدمين: {data['total']}</b>\n\n"
-    for u in data['users'][:10]:
-        text += f"🆔 <code>{u['user_id']}</code>\n👤 {u['first_name'] or u['username'] or 'مستخدم'}\n💰 {u['balance_usd']:.2f}$\n\n"
-    
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=back_admin_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_sales')
-def cb_admin_sales(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    sales = get_recent_sales(15)
-    if not sales:
-        bot.edit_message_text("📭 لا توجد مبيعات",
-                             call.message.chat.id, call.message.message_id,
-                             reply_markup=back_admin_keyboard())
-        return
-    
-    text = "📋 <b>آخر المبيعات:</b>\n\n"
-    for s in sales:
-        st = "✅" if s['status'] == 'completed' else "⏳" if s['status'] == 'pending' else "❌"
-        text += f"{st} #{s['id']} - {s['amount_usd']}$\n🆔 {s['buyer_id'][:10]}...\n\n"
-    
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=back_admin_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_exchange')
-def cb_admin_exchange(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    rate = get_exchange_rate()
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    for r in ["25", "50", "75", "100", "125", "150", "200", "250", "500"]:
-        markup.add(types.InlineKeyboardButton(f"{r}", callback_data=f"set_rate_{r}", style="primary"))
-    markup.add(types.InlineKeyboardButton("✏️ مخصص", callback_data="set_rate_custom", style="success"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
-    
-    bot.edit_message_text(
-        f"💱 <b>سعر الصرف الحالي:</b> {rate} ⭐ = 1$\n\nاختر السعر الجديد:",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('set_rate_'))
-def cb_set_rate(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    if call.data == "set_rate_custom":
-        msg = bot.edit_message_text("✏️ أرسل السعر الجديد:",
-                                     call.message.chat.id, call.message.message_id)
-        bot.register_next_step_handler(msg, save_custom_rate)
-        return
-    
-    rate = int(call.data.split('_')[2])
-    set_exchange_rate(rate)
-    bot.answer_callback_query(call.id, f"✅ {rate} ⭐ = 1$")
-    cb_admin_exchange(call)
-
-
-def save_custom_rate(message):
-    try:
-        rate = int(message.text.strip())
-        if rate < 1:
-            raise ValueError
-        set_exchange_rate(rate)
-        bot.send_message(message.chat.id, f"✅ تم التحديث: {rate} ⭐ = 1$",
-                        reply_markup=admin_panel_keyboard())
-    except:
-        bot.send_message(message.chat.id, "❌ رقم غير صحيح",
-                        reply_markup=admin_panel_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_charge')
-def cb_admin_charge(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    msg = bot.send_message(call.message.chat.id,
-                          "💰 أرسل: <code>آيدي, المبلغ</code>",
-                          parse_mode="HTML")
-    bot.register_next_step_handler(msg, admin_charge_step)
-
-
-def admin_charge_step(message):
-    try:
-        data = message.text.split(',')
-        uid = data[0].strip()
-        amount = float(data[1].strip())
-        add_balance_usd(uid, amount)
-        bot.send_message(message.chat.id, f"✅ تم إضافة {amount}$ للمستخدم {uid}",
-                        reply_markup=admin_panel_keyboard())
-    except:
-        bot.send_message(message.chat.id, "❌ صيغة خطأ",
-                        reply_markup=admin_panel_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_delete_product')
-def cb_admin_delete_product(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    products = get_available_products()
-    if not products:
-        bot.answer_callback_query(call.id, "لا توجد منتجات")
-        return
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for p in products[:20]:
-        markup.add(types.InlineKeyboardButton(
-            f"🗑️ {p['id']} - {p['name']}",
-            callback_data=f"del_{p['id']}",
-            style="danger"
-        ))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="primary"))
-    
-    bot.edit_message_text("🗑️ اختر منتجاً للحذف:",
-                         call.message.chat.id, call.message.message_id,
-                         reply_markup=markup)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('del_'))
-def cb_delete(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    pid = int(call.data.split('_')[1])
-    delete_product(pid)
-    bot.answer_callback_query(call.id, "✅ تم الحذف")
-    bot.edit_message_text("🗑️ تم الحذف",
-                         call.message.chat.id, call.message.message_id,
-                         reply_markup=admin_panel_keyboard())
-
-
-# =========================================================
-# ========== إضافة منتج ===================================
-# =========================================================
+# ========== إضافة منتج بأزرار ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'admin_add_product')
-def cb_admin_add_product(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
+def admin_add_product(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("⚡ تلقائي", callback_data="add_product_auto", style="success"),
-        types.InlineKeyboardButton("🤝 يدوي", callback_data="add_product_manual", style="danger")
+        types.InlineKeyboardButton("⚡ بيع تلقائي", callback_data="add_product_auto", style="success"),
+        types.InlineKeyboardButton("🤝 بيع يدوي", callback_data="add_product_manual", style="danger")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
-    
-    bot.edit_message_text("➕ <b>إضافة منتج</b>\n\nاختر نوع البيع:",
-                         call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=markup)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'add_product_auto')
-def cb_add_auto(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    uid = str(call.from_user.id)
-    user_data[uid] = {'sale_type': 'auto', 'step': 'name'}
-    msg = bot.edit_message_text("📦 <b>الخطوة 1/5</b>\nأرسل اسم المنتج:",
-                                 call.message.chat.id, call.message.message_id,
-                                 parse_mode="HTML", reply_markup=back_admin_keyboard())
-    bot.register_next_step_handler(msg, step_name)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'add_product_manual')
-def cb_add_manual(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    uid = str(call.from_user.id)
-    user_data[uid] = {'sale_type': 'manual', 'step': 'name'}
-    msg = bot.edit_message_text("📦 <b>الخطوة 1/5</b>\nأرسل اسم المنتج:",
-                                 call.message.chat.id, call.message.message_id,
-                                 parse_mode="HTML", reply_markup=back_admin_keyboard())
-    bot.register_next_step_handler(msg, step_name)
-
-
-def step_name(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    user_data[uid]['name'] = message.text.strip()
-    user_data[uid]['step'] = 'description'
-    msg = bot.send_message(message.chat.id, "📝 أرسل الوصف:")
-    bot.register_next_step_handler(msg, step_description)
-
-
-def step_description(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    user_data[uid]['description'] = message.text.strip()
-    user_data[uid]['step'] = 'price'
-    msg = bot.send_message(message.chat.id, "💰 أرسل السعر بالدولار:")
-    bot.register_next_step_handler(msg, step_price)
-
-
-def step_price(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    try:
-        user_data[uid]['price_usd'] = float(message.text.strip())
-        user_data[uid]['step'] = 'category'
-        msg = bot.send_message(message.chat.id, "🏷️ أرسل التصنيف:")
-        bot.register_next_step_handler(msg, step_category)
-    except:
-        msg = bot.send_message(message.chat.id, "❌ رقم خطأ، أعد الإرسال:")
-        bot.register_next_step_handler(msg, step_price)
-
-
-def step_category(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    user_data[uid]['category'] = message.text.strip()
-    user_data[uid]['step'] = 'code'
-    msg = bot.send_message(message.chat.id, "🔑 أرسل الكود:")
-    bot.register_next_step_handler(msg, step_code)
-
-
-def step_code(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    user_data[uid]['code'] = message.text.strip()
-    user_data[uid]['step'] = 'file'
-    msg = bot.send_message(message.chat.id,
-                          "📎 أرسل صورة/ملف (اختياري) أو اكتب 'تخطي':")
-    bot.register_next_step_handler(msg, step_file)
-
-
-def step_file(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    
-    file_id = None
-    if message.photo:
-        file_id = message.photo[-1].file_id
-    elif message.document:
-        file_id = message.document.file_id
-    elif message.video:
-        file_id = message.video.file_id
-    
-    user_data[uid]['file_id'] = file_id
-    user_data[uid]['step'] = 'stock'
-    msg = bot.send_message(message.chat.id, "📊 أرسل المخزون:")
-    bot.register_next_step_handler(msg, step_stock)
-
-
-def step_stock(message):
-    uid = str(message.from_user.id)
-    if uid not in user_data:
-        return
-    try:
-        stock = int(message.text.strip())
-        data = user_data[uid]
-        add_product(
-            name=data['name'],
-            description=data['description'],
-            price_usd=data['price_usd'],
-            category=data['category'],
-            code=data['code'],
-            stock=stock,
-            sale_type=data.get('sale_type', 'auto'),
-            file_id=data.get('file_id')
-        )
-        bot.send_message(
-            message.chat.id,
-            f"✅ تم إضافة المنتج!\n\n"
-            f"📦 {data['name']}\n"
-            f"💰 {data['price_usd']}$\n"
-            f"📊 المخزون: {stock}",
-            reply_markup=admin_panel_keyboard()
-        )
-        del user_data[uid]
-    except:
-        msg = bot.send_message(message.chat.id, "❌ رقم خطأ:")
-        bot.register_next_step_handler(msg, step_stock)
-
-
-# =========================================================
-# ========== إدارة الإحالات (أدمن) ========================
-# =========================================================
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_referral_panel')
-def cb_admin_referral(call):
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, "❌ غير مصرح")
-        return
-    
-    reward = get_referral_reward()
-    enabled = "✅" if is_referral_enabled() else "❌"
-    limit = get_referral_daily_limit()
-    stats = get_referral_stats()
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("💰 تغيير المكافأة", callback_data="admin_ref_set_reward", style="success"))
-    markup.add(types.InlineKeyboardButton("📅 تغيير الحد", callback_data="admin_ref_set_limit", style="primary"))
-    markup.add(types.InlineKeyboardButton("🔄 تفعيل/تعطيل", callback_data="admin_ref_toggle", style="danger"))
     markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
     
     bot.edit_message_text(
-        f"🎁 <b>إدارة الإحالات</b>\n\n"
-        f"💰 المكافأة: {reward:.2f}$\n"
-        f"🔘 الحالة: {enabled}\n"
-        f"📅 الحد اليومي: {limit}\n\n"
-        f"👥 المُحيلين: {stats['unique_referrers']}\n"
-        f"🔄 الإحالات: {stats['total_referrals']}\n"
-        f"💵 المدفوع: {stats['total_paid']:.2f}$",
-        call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=markup
+        "➕ **إضافة منتج جديد**\n\n"
+        "اختر طريقة البيع:\n\n"
+        "⚡ **تلقائي:** يتم تسليم الكود فوراً بعد الدفع\n"
+        "🤝 **يدوي:** يتم تأكيد الطلب من الأدمن قبل التسليم",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
     )
 
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_set_reward')
-def cb_ref_set_reward(call):
-    if not is_admin(str(call.from_user.id)):
-        return
-    msg = bot.send_message(call.message.chat.id, "💰 أرسل المكافأة الجديدة:")
-    bot.register_next_step_handler(msg, save_ref_reward)
-
-
-def save_ref_reward(message):
-    try:
-        amount = float(message.text.strip())
-        set_referral_reward(amount)
-        bot.send_message(message.chat.id, f"✅ المكافأة: {amount:.2f}$",
-                        reply_markup=admin_panel_keyboard())
-    except:
-        bot.send_message(message.chat.id, "❌ رقم خطأ",
-                        reply_markup=admin_panel_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_set_limit')
-def cb_ref_set_limit(call):
-    if not is_admin(str(call.from_user.id)):
-        return
-    msg = bot.send_message(call.message.chat.id, "📅 أرسل الحد اليومي:")
-    bot.register_next_step_handler(msg, save_ref_limit)
-
-
-def save_ref_limit(message):
-    try:
-        limit = int(message.text.strip())
-        set_setting('referral_daily_limit', str(limit))
-        bot.send_message(message.chat.id, f"✅ الحد: {limit}",
-                        reply_markup=admin_panel_keyboard())
-    except:
-        bot.send_message(message.chat.id, "❌ رقم خطأ",
-                        reply_markup=admin_panel_keyboard())
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_ref_toggle')
-def cb_ref_toggle(call):
-    if not is_admin(str(call.from_user.id)):
-        return
-    new_state = "0" if is_referral_enabled() else "1"
-    set_setting('referral_enabled', new_state)
-    bot.answer_callback_query(call.id, "✅ تم التبديل")
-    cb_admin_referral(call)
-
-
-# =========================================================
-# ========== إحصائيات النجوم ==============================
-# =========================================================
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_star_stats')
-def cb_star_stats(call):
-    if not is_admin(str(call.from_user.id)):
+@bot.callback_query_handler(func=lambda call: call.data == 'add_product_auto')
+def add_product_auto(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
-    stats = get_star_charge_stats()
-    text = (
-        f"⭐ <b>إحصائيات النجوم</b>\n\n"
-        f"👥 عدد الأشخاص: {stats['unique_users']}\n"
-        f"🔄 عدد العمليات: {stats['total_charges']}\n"
-        f"⭐ مجموع النجوم: {stats['total_stars']}\n"
-        f"💵 مجموع الدولار: {stats['total_usd']:.2f}$\n"
+    user_data[user_id] = {'sale_type': 'auto', 'step': 'name', 'file_id': None}
+    
+    msg = bot.edit_message_text(
+        "📦 **إضافة منتج جديد (بيع تلقائي)**\n\n"
+        "الخطوة 1/5\n"
+        "أرسل **اسم المنتج**:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
     )
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=back_admin_keyboard())
+    bot.register_next_step_handler(msg, process_product_name)
 
+@bot.callback_query_handler(func=lambda call: call.data == 'add_product_manual')
+def add_product_manual(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    user_data[user_id] = {'sale_type': 'manual', 'step': 'name', 'file_id': None}
+    
+    msg = bot.edit_message_text(
+        "📦 **إضافة منتج جديد (بيع يدوي)**\n\n"
+        "الخطوة 1/5\n"
+        "أرسل **اسم المنتج**:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
+    )
+    bot.register_next_step_handler(msg, process_product_name)
 
-# =========================================================
-# ========== إدارة القنوات ================================
-# =========================================================
+def process_product_name(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'name':
+        return
+    
+    user_data[user_id]['name'] = message.text.strip()
+    user_data[user_id]['step'] = 'description'
+    
+    msg = bot.send_message(
+        message.chat.id,
+        "📦 **الخطوة 2/5**\n"
+        "أرسل **وصف المنتج**:",
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
+    )
+    bot.register_next_step_handler(msg, process_product_description)
+
+def process_product_description(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'description':
+        return
+    
+    user_data[user_id]['description'] = message.text.strip()
+    user_data[user_id]['step'] = 'price_usd'
+    
+    msg = bot.send_message(
+        message.chat.id,
+        "💰 **الخطوة 3/5**\n"
+        "أرسل **السعر بالدولار**:\n"
+        "مثال: `5`",
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
+    )
+    bot.register_next_step_handler(msg, process_product_price_usd)
+
+def process_product_price_usd(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'price_usd':
+        return
+    
+    try:
+        price_usd = float(message.text.strip())
+        user_data[user_id]['price_usd'] = price_usd
+        user_data[user_id]['step'] = 'category'
+        
+        msg = bot.send_message(
+            message.chat.id,
+            "🏷️ **الخطوة 4/5**\n"
+            "أرسل **التصنيف**:\n"
+            "مثال: `ارقام`, `حسابات`, `اشتراكات`, ...",
+            parse_mode="Markdown",
+            reply_markup=back_admin_keyboard()
+        )
+        bot.register_next_step_handler(msg, process_product_category)
+    except:
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ **خطأ!**\n"
+            "أرسل رقم صحيح للسعر بالدولار:\n"
+            "مثال: `5`",
+            reply_markup=back_admin_keyboard()
+        )
+        bot.register_next_step_handler(msg, process_product_price_usd)
+
+def process_product_category(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'category':
+        return
+    
+    user_data[user_id]['category'] = message.text.strip()
+    user_data[user_id]['step'] = 'code'
+    
+    msg = bot.send_message(
+        message.chat.id,
+        "🔑 **الخطوة 5/5**\n"
+        "أرسل **الكود أو الحساب**:\n"
+        "مثال: `+123456789` أو `user:pass`",
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
+    )
+    bot.register_next_step_handler(msg, process_product_code)
+
+def process_product_code(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'code':
+        return
+    
+    user_data[user_id]['code'] = message.text.strip()
+    user_data[user_id]['step'] = 'file'
+    
+    msg = bot.send_message(
+        message.chat.id,
+        "📎 **الخطوة التالية**\n\n"
+        "أرسل **صورة أو ملف** للمنتج (اختياري)\n"
+        "أو أرسل `تخطي` للتخطي:",
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
+    )
+    bot.register_next_step_handler(msg, process_product_file)
+
+def process_product_file(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'file':
+        return
+    
+    file_id = None
+    file_type = "unknown"
+    
+    # التحقق من نوع الملف
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        file_type = "صورة"
+    elif message.document:
+        file_id = message.document.file_id
+        file_type = "مستند"
+    elif message.video:
+        file_id = message.video.file_id
+        file_type = "فيديو"
+    elif message.audio:
+        file_id = message.audio.file_id
+        file_type = "صوت"
+    
+    # ✅ طباعة للتشخيص
+    print(f"DEBUG_FILE: type={file_type}, file_id={str(file_id)[:60] if file_id else 'None'}")
+    
+    # ✅ التحقق من صحة file_id (يجب يبدأ بأحد هذه)
+    valid_starts = ('AgAC', 'BQAC', 'BAAC', 'CgAC', 'DQAC')
+    
+    if file_id and file_id.startswith(valid_starts):
+        user_data[user_id]['file_id'] = file_id
+        print(f"DEBUG_FILE: ✅ تم حفظ file_id بنجاح")
+        bot.send_message(
+            message.chat.id,
+            f"✅ **تم رفع الملف بنجاح!**\n"
+            f"📎 النوع: {file_type}",
+            reply_markup=back_admin_keyboard()
+        )
+    else:
+        user_data[user_id]['file_id'] = None
+        print(f"DEBUG_FILE: ❌ file_id غير صالح أو فارغ")
+        
+        if message.text and message.text.strip() == 'تخطي':
+            bot.send_message(
+                message.chat.id,
+                "⏭️ **تم التخطي.**",
+                reply_markup=back_admin_keyboard()
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                f"⚠️ **الملف غير صالح!**\n"
+                f"سيتم المتابعة بدون ملف.",
+                reply_markup=back_admin_keyboard()
+            )
+    
+    user_data[user_id]['step'] = 'stock'
+    
+    msg = bot.send_message(
+        message.chat.id,
+        "📊 **الخطوة الأخيرة**\n"
+        "أرسل **المخزون**:\n"
+        "مثال: `1` أو `5`",
+        parse_mode="Markdown",
+        reply_markup=back_admin_keyboard()
+    )
+    bot.register_next_step_handler(msg, process_product_stock)
+
+def process_product_stock(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_data or user_data[user_id].get('step') != 'stock':
+        return
+    
+    try:
+        stock = int(message.text.strip())
+        user_data[user_id]['stock'] = stock
+        
+        data = user_data[user_id]
+        sale_type = data.get('sale_type', 'auto')
+        file_id = data.get('file_id', None)
+        
+        # ✅ طباعة للتشخيص
+        print(f"DEBUG_STOCK: file_id المحفوظ = {str(file_id)[:60] if file_id else 'None'}")
+        
+        if add_product(
+            name=data['name'],
+            description=data['description'],
+            price_usd=data['price_usd'],
+            price_stars=0,
+            category=data['category'],
+            code=data['code'],
+            stock=stock,
+            sale_type=sale_type,
+            file_id=file_id
+        ):
+            text = f"""
+✅ **تمت إضافة المنتج بنجاح!**
+
+📦 **الاسم:** {data['name']}
+📄 **الوصف:** {data['description']}
+💰 **السعر:** {data['price_usd']}$
+🏷️ **التصنيف:** {data['category']}
+🔑 **الكود:** `{data['code']}`
+📊 **المخزون:** {stock}
+⚡ **نوع البيع:** {'تلقائي' if sale_type == 'auto' else 'يدوي'}
+📎 **الملف:** {'✅ مرفوع' if file_id else '❌ لا يوجد'}
+"""
+            bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+        else:
+            bot.send_message(message.chat.id, "❌ **فشل حفظ المنتج!**", reply_markup=admin_panel_keyboard())
+        
+        del user_data[user_id]
+        
+    except:
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ **خطأ!**\n"
+            "أرسل رقم صحيح للمخزون:\n"
+            "مثال: `1`",
+            reply_markup=back_admin_keyboard()
+        )
+        bot.register_next_step_handler(msg, process_product_stock)
+      
+# ========== أزرار الرجوع ولوحة التحكم ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'back_main')
+def back_main(call):
+    user_id = str(call.from_user.id)
+    is_admin = user_id in ADMIN_IDS or user_id in get_all_admins()
+    store_name = get_setting('store_name', '🛍️ متجر الأرقام')
+    user = get_user(user_id)
+    text = f"{store_name}\n\n👋 مرحباً بك!\n📊 عدد المنتجات: {get_product_count()['available']}\n💰 رصيدك بالدولار: {user['balance_usd']:.2f}$\n\n🔹 اختر من القائمة:"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=main_menu(is_admin))
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_panel')
+def admin_panel(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    text = f"""
+⚙️ **لوحة التحكم**
+
+📊 **الإحصائيات السريعة:**
+📦 المتاحة: {get_product_count()['available']}
+📦 الإجمالي: {get_product_count()['total']}
+💱 سعر الصرف: {get_exchange_rate()} ⭐ = 1$
+
+🔹 اختر الإجراء المناسب:
+"""
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_products')
+def admin_products(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    products = get_available_products()
+    if not products:
+        bot.edit_message_text("📭 **لا توجد منتجات.**", call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard())
+        return
+    
+    text = "📦 **جميع المنتجات:**\n\n"
+    for p in products:
+        sale_type_text = "⚡ تلقائي" if p['sale_type'] == 'auto' else "🤝 يدوي"
+        text += f"🆔 {p['id']} | {p['name']}\n"
+        text += f"💰 {p['price_usd']}$\n"
+        text += f"📦 {p['stock']} | {sale_type_text}\n\n"
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_delete_product')
+def admin_delete_product(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    products = get_available_products()
+    if not products:
+        bot.edit_message_text("📭 **لا توجد منتجات لحذفها.**", call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard())
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for p in products:
+        markup.add(types.InlineKeyboardButton(f"🗑️ {p['id']} - {p['name']}", callback_data=f"del_{p['id']}", style="danger"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="primary"))
+    
+    bot.edit_message_text("🗑️ **اختر منتجاً للحذف:**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('del_'))
+def delete_callback(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    product_id = int(call.data.split('_')[1])
+    delete_product(product_id)
+    bot.answer_callback_query(call.id, "✅ تم الحذف!")
+    bot.edit_message_text("🗑️ **تم حذف المنتج.**", call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_stats')
+def admin_stats(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    stats = get_product_count()
+    rate = get_exchange_rate()
+    
+    text = f"""
+📊 **الإحصائيات الكاملة**
+
+📦 **المنتجات:**
+• المتاحة: {stats['available']}
+• الإجمالي: {stats['total']}
+
+💱 **سعر الصرف:** {rate} ⭐ = 1$
+🪙 **1 سنت = {rate/100:.2f} نجمة**
+"""
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+    
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_sales')
+def admin_sales(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    sales = get_recent_sales(10)
+    if not sales:
+        bot.edit_message_text("📭 **لا توجد مبيعات.**", call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard())
+        return
+    
+    text = "📋 **آخر المبيعات:**\n\n"
+    for s in sales:
+        status_text = "✅ مكتمل" if s['status'] == 'completed' else "⏳ قيد المراجعة" if s['status'] == 'pending' else "❌ مرفوض"
+        text += f"🆔 #{s['id']}\n"
+        text += f"👤 `{s['buyer_id'][:8]}...`\n"
+        text += f"💵 {s['amount_usd']}$\n"
+        text += f"💳 {s['payment_method']}\n"
+        text += f"📊 {status_text}\n"
+        text += f"🕒 {s['sold_at']}\n\n"
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_charge')
+def admin_charge(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "💰 **شحن رصيد مستخدم**\n\nأرسل: `آيدي المستخدم, المبلغ بالدولار`\nمثال: `7325566792, 5`")
+    bot.register_next_step_handler(msg, admin_charge_step)
+
+def admin_charge_step(message):
+    try:
+        data = message.text.split(',')
+        if len(data) != 2:
+            bot.send_message(message.chat.id, "❌ **الصيغة غير صحيحة!**\nأرسل: `آيدي المستخدم, المبلغ`", reply_markup=admin_panel_keyboard())
+            return
+        user_id, amount = [x.strip() for x in data]
+        amount = float(amount)
+        stars = usd_to_stars(amount)
+        
+        add_balance_usd(user_id, amount)
+        add_balance_stars(user_id, stars)
+        
+        user = get_user(user_id)
+        bot.send_message(
+            message.chat.id, 
+            f"✅ **تم إضافة {amount}$ للمستخدم**\n\n"
+            f"👤 `{user_id}`\n"
+            f"💰 الرصيد بالدولار: {user['balance_usd']:.2f}$\n"
+            f"⭐ الرصيد بالنجوم: {user['balance_stars']}", 
+            parse_mode="Markdown", 
+            reply_markup=admin_panel_keyboard()
+        )
+        
+        try:
+            bot.send_message(user_id, f"✅ **قام الأدمن بإضافة رصيد إلى حسابك**\nبقيمة: 💵 {amount}$+ ({stars} ⭐)!")
+        except:
+            pass
+    except:
+        bot.send_message(message.chat.id, "❌ **حدث خطأ!**", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_exchange')
+def admin_exchange(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    rate = get_exchange_rate()
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    rates = ["25", "50", "75", "100", "125", "150", "200", "250", "500"]
+    for r in rates:
+        markup.add(types.InlineKeyboardButton(f"{r} ⭐ = 1$", callback_data=f"set_rate_{r}", style="primary"))
+    markup.add(types.InlineKeyboardButton("✏️ مخصص", callback_data="set_rate_custom", style="success"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
+    
+    bot.edit_message_text(
+        f"💱 **سعر الصرف الحالي:** {rate} ⭐ = 1$\n\n"
+        f"🪙 **1 سنت = {rate/100:.2f} نجمة**\n\n"
+        f"اختر السعر الجديد:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_rate_'))
+def set_rate_callback(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    if call.data == "set_rate_custom":
+        msg = bot.edit_message_text("✏️ **أدخل سعر الصرف الجديد:**\nمثال: `100`\n(كم نجمة = 1 دولار)", call.message.chat.id, call.message.message_id)
+        bot.register_next_step_handler(msg, set_rate_custom_step)
+        return
+
+    rate = int(call.data.split('_')[2])
+    set_exchange_rate(rate)
+    bot.answer_callback_query(call.id, f"✅ تم التحديث: {rate} ⭐ = 1$")
+    admin_exchange(call)
+
+def set_rate_custom_step(message):
+    try:
+        rate = int(message.text.strip())
+        if rate < 1:
+            bot.send_message(message.chat.id, "❌ **السعر يجب أن يكون أكبر من 0!**", reply_markup=admin_panel_keyboard())
+            return
+        set_exchange_rate(rate)
+        bot.send_message(message.chat.id, f"✅ **تم تحديث سعر الصرف إلى {rate} ⭐ = 1$**\n🪙 **1 سنت = {rate/100:.2f} نجمة**", reply_markup=admin_panel_keyboard())
+    except:
+        bot.send_message(message.chat.id, "❌ **أدخل رقماً صحيحاً!**", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_users')
+def admin_users(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    data = get_all_users()
+    total = data['total']
+    users = data['users']
+    
+    if not users:
+        bot.edit_message_text("👥 **لا توجد مستخدمين.**", call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard())
+        return
+    
+    text = f"👥 **عدد المستخدمين:** {total}\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    for u in users[:10]:
+        text += f"🆔 `{u[0][:8]}...`\n"
+        text += f"👤 **الاسم:** {u[2] or u[1] or 'مستخدم'}\n"
+        text += f"💰 **رصيد:** {u[3]:.2f}$\n"
+        text += f"📦 **طلبات:** {u[5]}\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+    
+# ========== تخصيص الأزرار ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_edit_buttons')
+def admin_edit_buttons(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    buttons = get_all_buttons()
+    
+    if not buttons:
+        bot.edit_message_text("❌ **لا توجد أزرار.**", call.message.chat.id, call.message.message_id, reply_markup=admin_panel_keyboard())
+        return
+    
+    text = "🎨 **تخصيص الأزرار والألوان**\n\n"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    for btn in buttons:
+        status = "✅" if btn['is_active'] else "❌"
+        style_name = {'primary': 'أزرق', 'success': 'أخضر', 'danger': 'أحمر'}.get(btn['style'], 'افتراضي')
+        
+        text += f"{status} **{btn['label']}**\n"
+        text += f"└ 🆔 `{btn['key']}` | صف {btn['row']} | عمود {btn['col']}\n"
+        text += f"└ 🎨 اللون: {style_name}\n\n"
+        
+        markup.add(types.InlineKeyboardButton(
+            f"✏️ تعديل {btn['label']}", 
+            callback_data=f"edit_btn_{btn['key']}",
+            style=btn['style']
+        ))
+    
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('edit_btn_'))
+def edit_button_callback(call):
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    key = call.data.replace('edit_btn_', '')
+    btn = next((b for b in get_all_buttons() if b['key'] == key), None)
+    
+    if not btn:
+        bot.answer_callback_query(call.id, "❌ الزر غير موجود!")
+        return
+    
+    style_name = {'primary': 'أزرق', 'success': 'أخضر', 'danger': 'أحمر'}.get(btn['style'], 'افتراضي')
+    
+    text = f"""
+✏️ **تعديل الزر:** `{key}`
+
+📌 **الحالي:**
+└ النص: {btn['label']}
+└ الصف: {btn['row']}
+└ العمود: {btn['col']}
+└ 🎨 اللون: {style_name}
+└ الحالة: {'مفعل' if btn['is_active'] else 'معطل'}
+
+اختر الإجراء:
+"""
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✏️ تغيير النص", callback_data=f"btn_label_{key}", style="primary"),
+        types.InlineKeyboardButton("🎨 تغيير اللون", callback_data=f"btn_color_{key}", style="success"),
+        types.InlineKeyboardButton("⬆️ تغيير الصف", callback_data=f"btn_row_{key}", style="primary"),
+        types.InlineKeyboardButton("➡️ تغيير العمود", callback_data=f"btn_col_{key}", style="primary"),
+        types.InlineKeyboardButton("🔄 تبديل الحالة", callback_data=f"btn_toggle_{key}", style="danger"),
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_edit_buttons", style="danger")
+    )
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('btn_color_'))
+def change_color_menu(call):
+    key = call.data.replace('btn_color_', '')
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    colors = [
+        ("primary", "🔵 أزرق"),
+        ("success", "🟢 أخضر"),
+        ("danger", "🔴 أحمر")
+    ]
+    
+    for style, label in colors:
+        markup.add(types.InlineKeyboardButton(
+            label, 
+            callback_data=f"set_color_{key}_{style}",
+            style=style
+        ))
+    
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_btn_{key}", style="danger"))
+    
+    bot.edit_message_text(
+        f"🎨 **اختر اللون للزر `{key}`**\n\n"
+        f"الألوان المتاحة:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_color_'))
+def save_new_color(call):
+    parts = call.data.replace('set_color_', '').rsplit('_', 1)
+    key, style = parts[0], parts[1]
+    
+    update_button(key, style=style)
+    
+    style_name = {'primary': 'أزرق', 'success': 'أخضر', 'danger': 'أحمر'}.get(style, 'افتراضي')
+    
+    bot.answer_callback_query(call.id, f"✅ تم تغيير اللون إلى {style_name}!")
+    
+    edit_button_callback(call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('btn_label_'))
+def prompt_change_label(call):
+    key = call.data.replace('btn_label_', '')
+    msg = bot.send_message(call.message.chat.id, f"✏️ أرسل النص الجديد للزر `{key}`:")
+    bot.register_next_step_handler(msg, save_new_label, key)
+
+def save_new_label(message, key):
+    new_label = message.text.strip()
+    update_button(key, label=new_label)
+    bot.send_message(message.chat.id, f"✅ تم تحديث نص الزر `{key}` إلى: {new_label}", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('btn_toggle_'))
+def toggle_button_status(call):
+    key = call.data.replace('btn_toggle_', '')
+    btn = next((b for b in get_all_buttons() if b['key'] == key), None)
+    if btn:
+        new_status = 0 if btn['is_active'] else 1
+        update_button(key, is_active=new_status)
+        bot.answer_callback_query(call.id, "🔄 تم تغيير حالة الزر بنجاح!")
+        admin_edit_buttons(call)
+        
+# ========== تغيير الصف ==========
+@bot.callback_query_handler(func=lambda call: call.data.startswith('btn_row_'))
+def btn_change_row(call):
+    """عرض قائمة الصفوف لتغيير صف الزر"""
+    key = call.data.replace('btn_row_', '')
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for row in range(1, 6):
+        markup.add(types.InlineKeyboardButton(
+            f"📌 صف {row}", 
+            callback_data=f"set_row_{key}_{row}",
+            style="primary"
+        ))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_btn_{key}", style="danger"))
+    
+    bot.edit_message_text(
+        f"📍 **اختر الصف الجديد للزر `{key}`**",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+# ========== حفظ الصف الجديد ==========
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_row_'))
+def set_btn_row(call):
+    """حفظ الصف الجديد للزر في قاعدة البيانات"""
+    parts = call.data.replace('set_row_', '').rsplit('_', 1)
+    key = parts[0]
+    row = int(parts[1])
+    
+    update_button(key, row=row)
+    bot.answer_callback_query(call.id, f"✅ تم تغيير الصف إلى {row}!")
+    bot.edit_message_text(
+        "✅ **تم تغيير الصف بنجاح!**",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=admin_panel_keyboard()
+    )
+
+# ========== تغيير العمود ==========
+@bot.callback_query_handler(func=lambda call: call.data.startswith('btn_col_'))
+def btn_change_col(call):
+    """عرض قائمة الأعمدة لتغيير عمود الزر"""
+    key = call.data.replace('btn_col_', '')
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    for col in range(1, 4):
+        markup.add(types.InlineKeyboardButton(
+            f"📍 عمود {col}", 
+            callback_data=f"set_col_{key}_{col}",
+            style="primary"
+        ))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_btn_{key}", style="danger"))
+    
+    bot.edit_message_text(
+        f"📍 **اختر العمود الجديد للزر `{key}`**",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+# ========== حفظ العمود الجديد ==========
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_col_'))
+def set_btn_col(call):
+    """حفظ العمود الجديد للزر في قاعدة البيانات"""
+    parts = call.data.replace('set_col_', '').rsplit('_', 1)
+    key = parts[0]
+    col = int(parts[1])
+    
+    update_button(key, col=col)
+    bot.answer_callback_query(call.id, f"✅ تم تغيير العمود إلى {col}!")
+    bot.edit_message_text(
+        "✅ **تم تغيير العمود بنجاح!**",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=admin_panel_keyboard()
+    )
+    
+# ========== إدارة المطورين ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_developers')
+def admin_developers(call):
+    """عرض قائمة المطورين وإدارة الصلاحيات"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    admins = get_all_admins()
+    text = "👑 **إدارة المطورين**\n\n"
+    text += "المطورين الحاليين:\n"
+    for admin in admins:
+        text += f"└ 🆔 `{admin}`\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("➕ إضافة مطور", callback_data="add_developer", style="success"),
+        types.InlineKeyboardButton("➖ حذف مطور", callback_data="remove_developer", style="danger"),
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger")
+    )
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'add_developer')
+def add_developer(call):
+    """طلب آيدي المطور الجديد لإضافته"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    msg = bot.edit_message_text("📝 **أدخل آيدي المطور الجديد:**", call.message.chat.id, call.message.message_id)
+    bot.register_next_step_handler(msg, save_developer)
+
+def save_developer(message):
+    """حفظ آيدي المطور الجديد في قاعدة البيانات"""
+    try:
+        new_admin = message.text.strip()
+        if add_admin(new_admin):
+            bot.send_message(message.chat.id, f"✅ **تم إضافة المطور الجديد!**\n🆔 `{new_admin}`", reply_markup=admin_panel_keyboard())
+        else:
+            bot.send_message(message.chat.id, "❌ **فشل الإضافة!** قد يكون موجوداً مسبقاً.", reply_markup=admin_panel_keyboard())
+    except:
+        bot.send_message(message.chat.id, "❌ **حدث خطأ!**", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'remove_developer')
+def remove_developer(call):
+    """عرض قائمة المطورين لحذف أحدهم"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    admins = get_all_admins()
+    if len(admins) <= 1:
+        bot.answer_callback_query(call.id, "❌ لا يمكن حذف المطور الوحيد!")
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for admin in admins:
+        if admin != user_id:
+            markup.add(types.InlineKeyboardButton(f"🗑️ حذف {admin}", callback_data=f"del_dev_{admin}", style="danger"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_developers", style="danger"))
+    
+    bot.edit_message_text("🗑️ **اختر مطوراً للحذف:**", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('del_dev_'))
+def delete_developer(call):
+    """حذف المطور المحدد من قاعدة البيانات"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    dev_id = call.data.split('_')[2]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM admins WHERE user_id=?", (dev_id,))
+    conn.commit()
+    conn.close()
+    
+    bot.answer_callback_query(call.id, f"✅ تم حذف المطور {dev_id}!")
+    admin_developers(call)
+    
+# ========== إدارة أسعار الشحن ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_charge_prices')
+def admin_charge_prices(call):
+    """عرض أسعار الشحن وإدارتها"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    prices = get_charge_prices()
+    text = "💲 **أسعار الشحن الحالية:**\n\n"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    if not prices:
+        text += "❌ لا توجد أسعار.\n"
+    else:
+        for p in prices:
+            text += f"🆔 {p['id']} | {p['amount_usd']}$ = ⭐ {p['amount_stars']}\n"
+            markup.add(types.InlineKeyboardButton(
+                f"✏️ تعديل {p['amount_usd']}$", 
+                callback_data=f"edit_price_{p['id']}",
+                style="primary"
+            ))
+            markup.add(types.InlineKeyboardButton(
+                f"🗑️ حذف {p['amount_usd']}$", 
+                callback_data=f"del_price_{p['id']}",
+                style="danger"
+            ))
+    
+    markup.add(types.InlineKeyboardButton("➕ إضافة سعر جديد", callback_data="admin_add_price", style="success"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_add_price')
+def admin_add_price(call):
+    """طلب بيانات سعر شحن جديد"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    msg = bot.edit_message_text(
+        "➕ **إضافة سعر شحن جديد**\n\n"
+        "أرسل: `المبلغ بالدولار, عدد النجوم`\n"
+        "مثال: `3, 150`\n\n"
+        "يعني: 3$ = 150 نجمة",
+        call.message.chat.id,
+        call.message.message_id
+    )
+    bot.register_next_step_handler(msg, add_price_step)
+
+def add_price_step(message):
+    """حفظ سعر الشحن الجديد في قاعدة البيانات"""
+    try:
+        data = message.text.split(',')
+        if len(data) != 2:
+            bot.send_message(message.chat.id, "❌ **الصيغة غير صحيحة!**\nأرسل: `المبلغ, النجوم`", reply_markup=admin_panel_keyboard())
+            return
+        
+        amount_usd = float(data[0].strip())
+        amount_stars = int(data[1].strip())
+        
+        if add_charge_price(amount_usd, amount_stars):
+            bot.send_message(message.chat.id, f"✅ **تم إضافة السعر بنجاح!**\n\n{amount_usd}$ = ⭐ {amount_stars}", reply_markup=admin_panel_keyboard())
+        else:
+            bot.send_message(message.chat.id, "❌ **فشل الإضافة!**", reply_markup=admin_panel_keyboard())
+    except:
+        bot.send_message(message.chat.id, "❌ **حدث خطأ!** تأكد من البيانات.", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('edit_price_'))
+def edit_price(call):
+    """طلب بيانات تعديل سعر شحن موجود"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    price_id = int(call.data.split('_')[2])
+    price = get_charge_price_by_id(price_id)
+    if not price:
+        bot.answer_callback_query(call.id, "❌ السعر غير موجود!")
+        return
+    
+    msg = bot.edit_message_text(
+        f"✏️ **تعديل السعر**\n\n"
+        f"السعر الحالي: {price['amount_usd']}$ = ⭐ {price['amount_stars']}\n\n"
+        f"أرسل: `المبلغ الجديد بالدولار, عدد النجوم الجديد`\n"
+        f"مثال: `5, 250`",
+        call.message.chat.id,
+        call.message.message_id
+    )
+    bot.register_next_step_handler(msg, edit_price_step, price_id)
+
+def edit_price_step(message, price_id):
+    """حفظ تعديل السعر في قاعدة البيانات"""
+    try:
+        data = message.text.split(',')
+        if len(data) != 2:
+            bot.send_message(message.chat.id, "❌ **الصيغة غير صحيحة!**\nأرسل: `المبلغ, النجوم`", reply_markup=admin_panel_keyboard())
+            return
+        
+        amount_usd = float(data[0].strip())
+        amount_stars = int(data[1].strip())
+        
+        update_charge_price(price_id, amount_usd, amount_stars)
+        bot.send_message(message.chat.id, f"✅ **تم تحديث السعر بنجاح!**\n\n{amount_usd}$ = ⭐ {amount_stars}", reply_markup=admin_panel_keyboard())
+    except:
+        bot.send_message(message.chat.id, "❌ **حدث خطأ!** تأكد من البيانات.", reply_markup=admin_panel_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('del_price_'))
+def delete_price(call):
+    """حذف سعر شحن من القائمة"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    price_id = int(call.data.split('_')[2])
+    delete_charge_price(price_id)
+    bot.answer_callback_query(call.id, "✅ تم حذف السعر!")
+    admin_charge_prices(call)
+    
+# ========== إدارة القنوات ==========
 @bot.callback_query_handler(func=lambda call: call.data == 'admin_channels')
-def cb_admin_channels(call):
-    if not is_admin(str(call.from_user.id)):
+def admin_channels(call):
+    """عرض قائمة القنوات وإدارتها"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
     activation = get_activation_channel()
     channels = get_activation_channels()
     
-    text = f"📢 <b>إدارة القنوات</b>\n\n"
-    text += f"🎯 قناة التفعيل: {activation or 'غير محددة'}\n\n"
+    text = "📢 **إدارة القنوات**\n\n"
+    text += f"🔹 قناة التفعيل الحالية: {activation or 'غير محددة'}\n\n"
+    text += "الخطوات:\n"
+    text += "1. أضف البوت كأدمن في القناة\n"
+    text += "2. اضغط على الزر لإضافة القناة\n\n"
+    text += "القنوات المضافة:\n"
+    
     for ch in channels:
-        text += f"└ {ch['channel_id']} | {ch['channel_name']}\n"
+        text += f"└ {ch['id']} | {ch['name']}\n"
     
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("➕ إضافة قناة", callback_data="add_channel", style="success"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
+    markup.add(
+        types.InlineKeyboardButton("➕ إضافة قناة", callback_data="add_channel", style="success"),
+        types.InlineKeyboardButton("🎯 تحديد قناة التفعيل", callback_data="set_activation_channel", style="primary"),
+        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger")
+    )
     
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=markup)
-
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'add_channel')
-def cb_add_channel(call):
-    if not is_admin(str(call.from_user.id)):
+def add_channel_callback(call):
+    """طلب معرف القناة الجديدة لإضافتها"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
-    msg = bot.send_message(call.message.chat.id,
-                          "📢 أرسل معرف القناة (مثال: @my_channel):")
+    
+    msg = bot.edit_message_text(
+        "📢 **إضافة قناة جديدة**\n\n"
+        "أرسل معرف القناة:\n"
+        "مثال: `@my_channel`",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
     bot.register_next_step_handler(msg, save_channel)
 
-
 def save_channel(message):
+    """حفظ القناة الجديدة في قاعدة البيانات"""
     try:
-        cid = message.text.strip()
-        add_channel(cid)
-        bot.send_message(message.chat.id, f"✅ تمت الإضافة: {cid}",
-                        reply_markup=admin_panel_keyboard())
+        channel_id = message.text.strip()
+        add_channel(channel_id)
+        bot.send_message(message.chat.id, f"✅ **تم إضافة القناة `{channel_id}`!**", reply_markup=admin_panel_keyboard())
     except:
-        bot.send_message(message.chat.id, "❌ خطأ",
-                        reply_markup=admin_panel_keyboard())
+        bot.send_message(message.chat.id, "❌ **حدث خطأ!**", reply_markup=admin_panel_keyboard())
 
-
-# =========================================================
-# ========== إدارة المطورين ===============================
-# =========================================================
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_developers')
-def cb_admin_developers(call):
-    if not is_admin(str(call.from_user.id)):
+@bot.callback_query_handler(func=lambda call: call.data == 'set_activation_channel')
+def set_activation(call):
+    """عرض القنوات لاختيار قناة التفعيل"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
-    admins = get_all_admins()
-    text = "👑 <b>المطورين:</b>\n\n"
-    for a in admins:
-        text += f"🆔 <code>{a}</code>\n"
+    channels = get_activation_channels()
+    if not channels:
+        bot.answer_callback_query(call.id, "❌ لا توجد قنوات مضافة!")
+        return
     
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("➕ إضافة", callback_data="add_developer", style="success"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
+    for ch in channels:
+        markup.add(types.InlineKeyboardButton(f"🎯 {ch['id']}", callback_data=f"set_act_{ch['id']}", style="primary"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_channels", style="danger"))
     
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=markup)
+    bot.edit_message_text("🎯 **اختر قناة التفعيل:**", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-
-@bot.callback_query_handler(func=lambda call: call.data == 'add_developer')
-def cb_add_dev(call):
-    if not is_admin(str(call.from_user.id)):
-        return
-    msg = bot.send_message(call.message.chat.id, "🆔 أرسل آيدي المطور الجديد:")
-    bot.register_next_step_handler(msg, save_dev)
-
-
-def save_dev(message):
-    try:
-        uid = message.text.strip()
-        add_admin(uid)
-        bot.send_message(message.chat.id, f"✅ تمت الإضافة: {uid}",
-                        reply_markup=admin_panel_keyboard())
-    except:
-        bot.send_message(message.chat.id, "❌ خطأ",
-                        reply_markup=admin_panel_keyboard())
-
-
-# =========================================================
-# ========== أسعار الشحن ==================================
-# =========================================================
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_charge_prices')
-def cb_admin_charge_prices(call):
-    if not is_admin(str(call.from_user.id)):
+@bot.callback_query_handler(func=lambda call: call.data.startswith('set_act_'))
+def set_act_channel(call):
+    """تعيين القناة المختارة كقناة التفعيل الرئيسية"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
         return
     
+    channel_id = call.data.replace('set_act_', '')
+    set_activation_channel(channel_id)
+    bot.answer_callback_query(call.id, f"✅ تم تحديد {channel_id} كقناة التفعيل!")
+    admin_channels(call)
+    
+# ========== إحصائيات شحن النجوم ==========
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_star_stats')
+def admin_star_stats(call):
+    """عرض إحصائيات شحن النجوم الحقيقية"""
+    user_id = str(call.from_user.id)
+    if user_id not in ADMIN_IDS and user_id not in get_all_admins():
+        bot.answer_callback_query(call.id, "❌ غير مصرح!")
+        return
+    
+    stats = get_star_charge_stats()
+    
+    text = f"⭐ **إحصائيات شحن النجوم الحقيقية**\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    text += f"👥 **عدد الأشخاص اللي شحنوا:** {stats['unique_users']}\n"
+    text += f"🔄 **عدد مرات الشحن:** {stats['total_charges']}\n"
+    text += f"⭐ **مجموع النجوم:** {stats['total_stars']}\n"
+    text += f"💵 **مجموع الدولار:** {stats['total_usd']:.2f}$\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    if stats['recent']:
+        text += "📋 **آخر عمليات الشحن:**\n\n"
+        for r in stats['recent']:
+            text += f"👤 {r[1] or r[0]}\n"
+            text += f"💵 {r[2]:.2f}$ | ⭐ {r[3]}\n"
+            text += f"🕒 {r[4]}\n"
+            text += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+
+# ========== معالجات القائمة السفلية ==========
+@bot.message_handler(func=lambda message: message.text == "💰 رصيدي")
+def btn_balance(message):
+    """عرض رصيد المستخدم"""
+    user = get_user(str(message.from_user.id))
+    if not user:
+        bot.reply_to(message, "❌ حدث خطأ!")
+        return
+    
+    text = f"""
+💰 **رصيدك الحالي:**
+
+💵 {user['balance_usd']:.2f}$
+
+📊 **إحصائياتك:**
+📦 عدد الطلبات: {user['orders_count']}
+💵 إجمالي المشتريات: {user['total_spent']:.2f}$
+"""
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.text == "📋 طلباتي")
+def btn_orders(message):
+    """عرض طلبات المستخدم"""
+    sales = get_recent_sales(10)
+    user_sales = [s for s in sales if s['buyer_id'] == str(message.from_user.id)]
+    
+    if not user_sales:
+        bot.reply_to(message, "📭 لا توجد طلبات سابقة.")
+        return
+    
+    text = "📋 **طلباتي السابقة:**\n\n"
+    for s in user_sales:
+        status_text = "✅ مكتمل" if s['status'] == 'completed' else "⏳ قيد المراجعة" if s['status'] == 'pending' else "❌ مرفوض"
+        text += f"🆔 #{s['id']}\n💵 {s['amount_usd']}$\n💳 {s['payment_method']}\n📊 {status_text}\n🕒 {s['sold_at']}\n\n"
+    
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.text == "💳 شحن رصيد")
+def btn_charge(message):
+    """عرض خيارات الشحن"""
     prices = get_charge_prices()
-    text = "💲 <b>أسعار الشحن:</b>\n\n"
-    for p in prices:
-        text += f"🆔 {p['id']} | {p['amount_usd']}$ = ⭐ {p['amount_stars']}\n"
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("➕ إضافة سعر", callback_data="admin_add_price", style="success"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel", style="danger"))
-    
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=markup)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_add_price')
-def cb_add_price(call):
-    if not is_admin(str(call.from_user.id)):
-        return
-    msg = bot.send_message(call.message.chat.id,
-                          "💲 أرسل: <code>الدولار, النجوم</code>",
-                          parse_mode="HTML")
-    bot.register_next_step_handler(msg, save_price)
-
-
-def save_price(message):
-    try:
-        parts = message.text.split(',')
-        usd = float(parts[0].strip())
-        stars = int(parts[1].strip())
-        add_charge_price(usd, stars)
-        bot.send_message(message.chat.id, f"✅ {usd}$ = ⭐ {stars}",
-                        reply_markup=admin_panel_keyboard())
-    except:
-        bot.send_message(message.chat.id, "❌ صيغة خطأ",
-                        reply_markup=admin_panel_keyboard())
-
-
-# =========================================================
-# ========== تخصيص الأزرار ================================
-# =========================================================
-@bot.callback_query_handler(func=lambda call: call.data == 'admin_edit_buttons')
-def cb_admin_edit_buttons(call):
-    if not is_admin(str(call.from_user.id)):
-        return
-    
-    buttons = get_all_buttons()
-    text = "🎨 <b>الأزرار:</b>\n\n"
-    for b in buttons:
-        status = "✅" if b['is_active'] else "❌"
-        text += f"{status} <code>{b['button_key']}</code>\n└ {b['label']} | {b['style']}\n\n"
-    
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                         parse_mode="HTML", reply_markup=back_admin_keyboard())
-
-
-# =========================================================
-# ========== تشغيل البوت في Thread ========================
-# =========================================================
-def run_bot():
-    """تشغيل polling في Thread منفصل"""
-    try:
-        # انتظر الموقع
-        time.sleep(2)
-        
-        print("🤖 [BOT] تشغيل البوت...")
-        
-        # حذف webhook
-        try:
-            bot.delete_webhook(drop_pending_updates=False)
-            print("✅ [BOT] تم حذف webhook")
-        except Exception as e:
-            print(f"⚠️ [BOT] {e}")
-        
-        # تسجيل الأوامر
-        try:
-            bot.set_my_commands([
-                BotCommand("start", "🏠 بدء البوت"),
-                BotCommand("id", "🆔 عرض آيديك"),
-                BotCommand("help", "❓ المساعدة"),
-            ])
-            print("✅ [BOT] تم تسجيل الأوامر")
-        except Exception as e:
-            print(f"⚠️ [BOT] {e}")
-        
-        bot_status['running'] = True
-        print("🚀 [BOT] البوت شغال...")
-        
-        while True:
-            try:
-                bot.infinity_polling(
-                    timeout=30,
-                    long_polling_timeout=20,
-                    none_stop=True,
-                    skip_pending=False
-                )
-            except Exception as e:
-                print(f"❌ [BOT] خطأ: {e}")
-                time.sleep(5)
-    except Exception as e:
-        print(f"❌ [BOT] خطأ فادح: {e}")
-        traceback.print_exc()
-
-
-# =========================================================
-# ========== Flask Routes =================================
-# =========================================================
-def verify_telegram_auth(data):
-    """التحقق من Telegram Login Widget"""
-    check_hash = data.pop('hash', None)
-    if not check_hash:
-        return False
-    data_check_string = '\n'.join(f"{k}={v}" for k, v in sorted(data.items()))
-    secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
-    hmac_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    return hmac_hash == check_hash
-
-
-def login_required(f):
-    @wraps(f)
-    def wrapper(*a, **kw):
-        if 'user_id' not in session:
-            flash("الرجاء تسجيل الدخول", "error")
-            return redirect(url_for('login'))
-        return f(*a, **kw)
-    return wrapper
-
-
-def admin_required(f):
-    @wraps(f)
-    def wrapper(*a, **kw):
-        if 'user_id' not in session:
-            return redirect(url_for('login'))
-        if not is_admin(session['user_id']):
-            abort(403)
-        return f(*a, **kw)
-    return wrapper
-
-
-@app.context_processor
-def inject_globals():
-    user = None
-    if 'user_id' in session:
-        user = get_user(session['user_id'])
-    return {
-        "current_user": user,
-        "is_admin": is_admin(session['user_id']) if user else False,
-        "store_name": get_setting('store_name', '🛍️ متجر الأرقام'),
-        "developer": DEVELOPER_USERNAME,
-    }
-
-
-# ===== Health check =====
-@app.route('/ping')
-def ping():
-    return "pong", 200
-
-
-@app.route('/health')
-def health():
-    return {
-        'status': 'ok' if bot_status['running'] else 'starting',
-        'bot_running': bot_status['running'],
-        'started_at': bot_status['started_at'],
-        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    }, 200
-
-
-# ===== دالة عرض HTML =====
-def render_page(content, title="", extra_css="", extra_js=""):
-    user_name = "مستخدم"
-    if 'user_id' in session:
-        u = get_user(session['user_id'])
-        if u:
-            user_name = u['first_name'] or u['username'] or "مستخدم"
-    
-    user_html = ""
-    if session.get('user_id'):
-        user_html = f'''
-        <div class="user-info">
-            <span>👤 {user_name}</span>
-            <a href="/logout" class="btn btn-danger" style="padding:8px 16px;font-size:12px;">خروج</a>
-        </div>
-        '''
-    
-    flashes = ''.join([f'<div class="flash {cat}">{msg}</div>' for cat, msg in get_flashed_messages(with_categories=True)])
-    
-    return f'''<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title or get_setting('store_name', 'متجر الأرقام')}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: 'Cairo', sans-serif;
-            background: #0a0e1a;
-            color: #fff;
-            direction: rtl;
-            min-height: 100vh;
-            line-height: 1.6;
-        }}
-        body::before {{
-            content: '';
-            position: fixed;
-            inset: 0;
-            background: 
-                radial-gradient(circle at 20% 30%, rgba(59, 130, 246, 0.15), transparent 50%),
-                radial-gradient(circle at 80% 70%, rgba(16, 185, 129, 0.1), transparent 50%);
-            z-index: -1;
-        }}
-        .container {{ max-width: 900px; margin: 0 auto; padding: 20px; }}
-        .header {{
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 20px;
-            background: linear-gradient(135deg, #151b2e, #1e2740);
-            border-radius: 16px; margin-bottom: 20px;
-            border: 1px solid #2d3748;
-            flex-wrap: wrap; gap: 12px;
-        }}
-        .header h1 {{
-            font-size: 22px;
-            background: linear-gradient(135deg, #3b82f6, #10b981);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }}
-        .user-info {{ display: flex; align-items: center; gap: 10px; font-size: 14px; color: #94a3b8; }}
-        .card {{
-            background: linear-gradient(135deg, #151b2e, #1a2338);
-            border-radius: 16px; padding: 24px; margin-bottom: 16px;
-            border: 1px solid #2d3748;
-            animation: slideIn 0.5s ease;
-        }}
-        @keyframes slideIn {{
-            from {{ opacity: 0; transform: translateY(20px); }}
-            to {{ opacity: 1; transform: translateY(0); }}
-        }}
-        .card:hover {{ border-color: #3b82f6; }}
-        .btn {{
-            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-            padding: 14px 20px; border: none; border-radius: 12px;
-            font-size: 16px; font-weight: 700;
-            cursor: pointer; text-decoration: none;
-            transition: all 0.3s; font-family: inherit; color: #fff;
-        }}
-        .btn:hover {{ transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.4); }}
-        .btn-primary {{ background: linear-gradient(135deg, #3b82f6, #2563eb); }}
-        .btn-success {{ background: linear-gradient(135deg, #10b981, #059669); }}
-        .btn-danger {{ background: linear-gradient(135deg, #ef4444, #dc2626); }}
-        .btn-warning {{ background: linear-gradient(135deg, #f59e0b, #d97706); }}
-        .btn-block {{ width: 100%; }}
-        .grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
-        .input {{
-            width: 100%; padding: 14px;
-            background: #0a0e1a; border: 2px solid #2d3748;
-            border-radius: 12px; color: #fff; font-size: 16px;
-            font-family: inherit; margin-bottom: 12px;
-        }}
-        .input:focus {{ outline: none; border-color: #3b82f6; }}
-        .flash {{
-            padding: 14px 20px; border-radius: 12px; margin-bottom: 16px;
-            font-weight: 700;
-        }}
-        .flash.success {{ background: rgba(16,185,129,0.15); border: 2px solid #10b981; color: #10b981; }}
-        .flash.error {{ background: rgba(239,68,68,0.15); border: 2px solid #ef4444; color: #ef4444; }}
-        .stats {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }}
-        .stat {{
-            text-align: center; padding: 16px;
-            background: #0a0e1a; border-radius: 12px;
-            border: 1px solid #2d3748;
-        }}
-        .stat .num {{ font-size: 24px; font-weight: 900; color: #10b981; }}
-        .stat .label {{ font-size: 12px; color: #94a3b8; margin-top: 4px; }}
-        .footer {{ text-align: center; margin-top: 40px; padding: 20px; color: #64748b; font-size: 14px; }}
-        @media (max-width: 600px) {{
-            .grid, .stats {{ grid-template-columns: 1fr; }}
-            .header {{ flex-direction: column; }}
-        }}
-        {extra_css}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>✨ {get_setting('store_name', 'متجر الأرقام')}</h1>
-            {user_html}
-        </div>
-        {flashes}
-        {content}
-        <div class="footer">
-            <p>💙 {get_setting('store_name', 'متجر الأرقام')}</p>
-            <p style="font-size: 12px;">تطوير: @{DEVELOPER_USERNAME}</p>
-        </div>
-    </div>
-    <script>{extra_js}</script>
-</body>
-</html>'''
-
-
-# ===== الصفحات =====
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        uid = request.form.get('user_id', '').strip()
-        if not uid.isdigit():
-            flash("الآيدي يجب أن يكون أرقاماً", "error")
-            return redirect(url_for('login'))
-        if not get_user(uid):
-            create_user(uid, "", f"مستخدم {uid}")
-        session['user_id'] = uid
-        flash("✅ تم تسجيل الدخول", "success")
-        return redirect(url_for('index'))
-    
-    content = '''
-    <div class="card" style="max-width: 500px; margin: 40px auto;">
-        <h2 style="text-align: center; margin-bottom: 30px; color: #3b82f6;">🔐 تسجيل الدخول</h2>
-        <p style="color: #94a3b8; margin-bottom: 20px; text-align: center;">
-            أدخل الآيدي الخاص بك في Telegram
-        </p>
-        <div style="background: #0a0e1a; padding: 16px; border-radius: 12px; margin-bottom: 20px;">
-            <p style="color: #10b981; font-weight: 700;">💡 كيف أحصل على الآيدي؟</p>
-            <p style="font-size: 14px; color: #94a3b8; margin-top: 8px;">
-                افتح البوت وأرسل <code>/id</code>
-            </p>
-        </div>
-        <form method="POST">
-            <input type="text" name="user_id" class="input" placeholder="مثال: 123456789" required pattern="[0-9]+">
-            <button type="submit" class="btn btn-primary btn-block">🚀 دخول</button>
-        </form>
-    </div>
-    '''
-    return render_page(content, title="تسجيل الدخول")
-
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
-
-
-@app.route('/')
-@login_required
-def index():
-    user = get_user(session['user_id'])
-    pc = get_product_count()
-    
-    content = f'''
-    <div class="card" style="text-align: center;">
-        <h2 style="font-size: 28px; margin-bottom: 12px;">🌟 أهلاً وسهلاً 🌟</h2>
-        <p style="font-size: 20px; color: #3b82f6; font-weight: 700;">{user['first_name']}</p>
-    </div>
-    <div class="card">
-        <h3 style="margin-bottom: 16px;">📊 إحصائيات</h3>
-        <div class="stats">
-            <div class="stat"><div class="num">{pc['available']}</div><div class="label">منتج</div></div>
-            <div class="stat"><div class="num">{user['balance_usd']:.2f}$</div><div class="label">رصيدك</div></div>
-            <div class="stat"><div class="num">{user['orders_count']}</div><div class="label">طلباتك</div></div>
-        </div>
-    </div>
-    <div class="card">
-        <h3 style="margin-bottom: 16px;">🔹 القائمة</h3>
-        <div class="grid">
-            <a href="/products" class="btn btn-primary">🛍️ المنتجات</a>
-            <a href="/balance" class="btn btn-success">💰 رصيدي</a>
-            <a href="/charge" class="btn btn-danger">💳 شحن الرصيد</a>
-            <a href="/orders" class="btn btn-primary">📋 طلباتي</a>
-            <a href="/share" class="btn btn-success">🎁 شارك واربح</a>
-            <a href="/help" class="btn btn-danger">❓ مساعدة</a>
-        </div>
-    </div>
-    '''
-    
-    if is_admin(session['user_id']):
-        content += '''
-        <div class="card" style="border-color: #f59e0b;">
-            <h3 style="color: #f59e0b;">⚙️ لوحة التحكم</h3>
-            <a href="/admin" class="btn btn-warning btn-block" style="margin-top: 12px;">🔧 فتح</a>
-        </div>
-        '''
-    
-    return render_page(content, title="الرئيسية")
-
-
-@app.route('/products')
-@login_required
-def products():
-    items = get_available_products()
-    if not items:
-        content = '''
-        <div class="card" style="text-align: center;">
-            <p style="font-size: 60px;">📭</p>
-            <p>لا توجد منتجات</p>
-            <a href="/" class="btn btn-primary" style="margin-top: 20px;">🔙 رجوع</a>
-        </div>
-        '''
-        return render_page(content, title="المنتجات")
-    
-    html = ""
-    for p in items:
-        availability = "♾️ عند طلب" if p['sale_type'] == 'manual' else f"✅ متوفر ({p['stock']})"
-        html += f'''
-        <div class="card">
-            <h3 style="color: #3b82f6;">📦 {p['name']}</h3>
-            <p style="color: #94a3b8; margin: 8px 0;">{p['description'][:100]}</p>
-            <p style="color: #10b981;">{availability}</p>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
-                <span style="font-size: 24px; font-weight: 900; color: #10b981;">{p['price_usd']}$</span>
-                <a href="/product/{p['id']}" class="btn btn-primary">🛒 شراء</a>
-            </div>
-        </div>
-        '''
-    
-    content = f'<div class="card"><h2>🛍️ المنتجات ({len(items)})</h2></div>{html}<a href="/" class="btn btn-danger btn-block">🔙 رجوع</a>'
-    return render_page(content, title="المنتجات")
-
-
-@app.route('/product/<int:pid>')
-@login_required
-def product_detail(pid):
-    p = get_product(pid)
-    if not p or p['status'] != 'available' or p['stock'] <= 0:
-        flash("❌ المنتج غير متوفر", "error")
-        return redirect(url_for('products'))
-    
-    user = get_user(session['user_id'])
-    can_buy = user['balance_usd'] >= p['price_usd']
-    
-    content = f'''
-    <div class="card">
-        <h2 style="color: #3b82f6;">📦 {p['name']}</h2>
-        <p style="color: #94a3b8; margin: 16px 0;">{p['description']}</p>
-        <div style="background: #0a0e1a; padding: 16px; border-radius: 12px; margin-bottom: 16px;">
-            <p>💰 السعر: <b style="color: #10b981;">{p['price_usd']}$</b></p>
-            <p>📊 المتوفر: <b>{p['stock']}</b></p>
-            <p>💵 رصيدك: <b style="color: {'#10b981' if can_buy else '#ef4444'};">{user['balance_usd']:.2f}$</b></p>
-        </div>
-        <form method="POST" action="/buy/{p['id']}">
-            <button type="submit" class="btn btn-success btn-block" {'disabled' if not can_buy else ''}>
-                💳 شراء الآن
-            </button>
-        </form>
-        <a href="/products" class="btn btn-danger btn-block" style="margin-top: 12px;">🔙 رجوع</a>
-    </div>
-    '''
-    return render_page(content, title=p['name'])
-
-
-@app.route('/buy/<int:pid>', methods=['POST'])
-@login_required
-def buy(pid):
-    p = get_product(pid)
-    if not p or p['status'] != 'available' or p['stock'] <= 0:
-        flash("❌ المنتج غير متوفر", "error")
-        return redirect(url_for('products'))
-    
-    uid = session['user_id']
-    user = get_user(uid)
-    
-    if user['balance_usd'] < p['price_usd']:
-        flash(f"❌ رصيدك غير كافٍ", "error")
-        return redirect(url_for('product_detail', pid=pid))
-    
-    if not deduct_balance_usd(uid, p['price_usd']):
-        flash("❌ فشل الخصم", "error")
-        return redirect(url_for('product_detail', pid=pid))
-    
-    method = "دولار"
-    
-    if p['sale_type'] == 'manual':
-        add_sale(pid, uid, p['price_usd'], 0, method, "pending")
-        
-        # إشعار الأدمن
-        for admin_id in ADMIN_IDS:
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": admin_id,
-                        "text": f"🤝 <b>طلب بيع يدوي (موقع)!</b>\n\n"
-                                f"📦 {p['name']}\n"
-                                f"👤 {user['first_name']}\n"
-                                f"🆔 <code>{uid}</code>\n"
-                                f"💰 {p['price_usd']}$",
-                        "parse_mode": "HTML"
-                    },
-                    timeout=5
-                )
-            except:
-                pass
-        
-        flash("⏳ تم إرسال طلبك للمراجعة", "success")
-        return redirect(url_for('orders'))
-    
-    # بيع تلقائي
-    new_stock = p['stock'] - 1
-    if new_stock <= 0:
-        mark_sold(pid, uid)
-    else:
-        update_stock(pid, new_stock)
-    
-    add_sale(pid, uid, p['price_usd'], 0, method, "completed")
-    
-    with db() as conn:
-        conn.execute(
-            "UPDATE users SET orders_count=orders_count+1, total_spent=total_spent+? WHERE user_id=?",
-            (p['price_usd'], uid)
-        )
-        conn.commit()
-    
-    # إشعار المشتري في تيليجرام
-    try:
-        text = (f"✅ <b>تم الشراء من الموقع!</b>\n\n"
-                f"📦 {p['name']}\n"
-                f"🔑 <code>{p['code']}</code>\n"
-                f"💰 {p['price_usd']}$")
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": uid, "text": text, "parse_mode": "HTML"},
-            timeout=5
-        )
-    except:
-        pass
-    
-    content = f'''
-    <div class="card" style="text-align: center; border-color: #10b981;">
-        <p style="font-size: 80px;">✅</p>
-        <h2 style="color: #10b981;">تم الشراء بنجاح!</h2>
-        <div style="background: #0a0e1a; padding: 20px; border-radius: 12px; margin: 20px 0;">
-            <p>📦 {p['name']}</p>
-            <p style="color: #94a3b8; margin-top: 12px;">🔑 الكود:</p>
-            <code style="color: #10b981; font-size: 18px; font-weight: 700; word-break: break-all;">{p['code']}</code>
-            <p style="margin-top: 12px;">💰 <b style="color: #10b981;">{p['price_usd']}$</b></p>
-        </div>
-        <div class="grid">
-            <a href="/products" class="btn btn-primary">🛍️ منتجات أخرى</a>
-            <a href="/" class="btn btn-success">🏠 الرئيسية</a>
-        </div>
-    </div>
-    '''
-    return render_page(content, title="تم الشراء")
-
-
-@app.route('/balance')
-@login_required
-def balance():
-    user = get_user(session['user_id'])
-    content = f'''
-    <div class="card" style="text-align: center; border-color: #10b981;">
-        <p style="font-size: 60px;">💰</p>
-        <h2 style="color: #10b981;">رصيدك</h2>
-        <p style="font-size: 48px; font-weight: 900; color: #10b981; margin: 20px 0;">
-            {user['balance_usd']:.2f}$
-        </p>
-    </div>
-    <div class="card">
-        <div class="stats">
-            <div class="stat"><div class="num">{user['orders_count']}</div><div class="label">طلبات</div></div>
-            <div class="stat"><div class="num">{user['total_spent']:.2f}$</div><div class="label">مشتريات</div></div>
-            <div class="stat"><div class="num">{user['balance_stars']}</div><div class="label">نجوم</div></div>
-        </div>
-    </div>
-    <div class="grid">
-        <a href="/charge" class="btn btn-success">💳 شحن</a>
-        <a href="/" class="btn btn-primary">🏠 الرئيسية</a>
-    </div>
-    '''
-    return render_page(content, title="رصيدي")
-
-
-@app.route('/charge')
-@login_required
-def charge():
-    prices = get_charge_prices()
-    rate = get_exchange_rate()
-    bot_username = get_setting('bot_username', 'sd_5g_bot')
-    
     if not prices:
-        content = '<div class="card" style="text-align: center;"><p>❌ لا توجد أسعار</p></div>'
-        return render_page(content, title="شحن")
+        bot.reply_to(message, "❌ لا توجد أسعار شحن متاحة.")
+        return
     
-    html = ""
+    markup = types.InlineKeyboardMarkup(row_width=2)
     for p in prices:
-        html += f'<a href="https://t.me/{bot_username}" target="_blank" class="btn btn-success btn-block" style="margin-bottom: 12px;">💵 {p["amount_usd"]}$ = ⭐ {p["amount_stars"]}</a>'
+        markup.add(types.InlineKeyboardButton(
+            f"💵 {p['amount_usd']}$ = ⭐ {p['amount_stars']}", 
+            callback_data=f"charge_{p['amount_usd']}_{p['amount_stars']}",
+            style="success" if p['amount_usd'] <= 5 else "primary"
+        ))
     
-    content = f'''
-    <div class="card" style="text-align: center;">
-        <h2 style="color: #3b82f6;">💳 شحن الرصيد</h2>
-        <p style="color: #94a3b8; margin-top: 12px;">💱 1$ = {rate} ⭐</p>
-    </div>
-    <div class="card">
-        <h3 style="margin-bottom: 16px;">اختر المبلغ:</h3>
-        {html}
-    </div>
-    <a href="/" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="شحن")
-
-
-@app.route('/orders')
-@login_required
-def orders():
-    items = get_user_sales(session['user_id'])
-    if not items:
-        content = '<div class="card" style="text-align: center;"><p>📭 لا توجد طلبات</p></div>'
-        return render_page(content, title="طلباتي")
-    
-    html = ""
-    for s in items:
-        if s['status'] == 'completed':
-            st, c = "✅ مكتمل", "#10b981"
-        elif s['status'] == 'pending':
-            st, c = "⏳ قيد المراجعة", "#f59e0b"
-        else:
-            st, c = "❌ مرفوض", "#ef4444"
-        
-        html += f'''
-        <div class="card">
-            <div style="display: flex; justify-content: space-between;">
-                <div>
-                    <p>🆔 #{s['id']}</p>
-                    <p style="font-size: 20px; font-weight: 700; color: #10b981;">{s['amount_usd']}$</p>
-                    <p style="font-size: 12px; color: #64748b;">🕒 {s['sold_at']}</p>
-                </div>
-                <span style="color: {c};">{st}</span>
-            </div>
-        </div>
-        '''
-    
-    content = f'<div class="card"><h2>📋 طلباتي ({len(items)})</h2></div>{html}<a href="/" class="btn btn-primary btn-block">🔙 رجوع</a>'
-    return render_page(content, title="طلباتي")
-
-
-@app.route('/share')
-@login_required
-def share():
-    uid = session['user_id']
-    if not is_referral_enabled():
-        flash("❌ الميزة معطلة", "error")
-        return redirect(url_for('index'))
-    
-    stats = get_user_referrals(uid)
-    daily = get_daily_referrals(uid)
-    limit = get_referral_daily_limit()
-    reward = get_referral_reward()
-    bot_username = get_setting('bot_username', 'sd_5g_bot')
-    ref_link = f"https://t.me/{bot_username}?start=ref_{uid}"
-    
-    content = f'''
-    <div class="card" style="text-align: center;">
-        <p style="font-size: 60px;">🎁</p>
-        <h2 style="color: #10b981;">شارك واربح</h2>
-        <p style="color: #94a3b8;">{reward:.2f}$ عن كل صديق</p>
-    </div>
-    <div class="card">
-        <div class="stats">
-            <div class="stat"><div class="num">{stats['count']}</div><div class="label">إحالاتك</div></div>
-            <div class="stat"><div class="num">{stats['total_earned']:.2f}$</div><div class="label">أرباحك</div></div>
-            <div class="stat"><div class="num">{daily}/{limit}</div><div class="label">اليوم</div></div>
-        </div>
-    </div>
-    <div class="card">
-        <h3>🔗 رابطك:</h3>
-        <div style="background: #0a0e1a; padding: 16px; border-radius: 12px; margin: 12px 0;">
-            <code style="color: #3b82f6; word-break: break-all;">{ref_link}</code>
-        </div>
-        <a href="https://t.me/share/url?url={ref_link}&text=انضم!" target="_blank" class="btn btn-success btn-block">
-            📤 مشاركة
-        </a>
-    </div>
-    <a href="/" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="شارك واربح")
-
-
-@app.route('/help')
-@login_required
-def help_page():
-    content = f'''
-    <div class="card" style="text-align: center;">
-        <p style="font-size: 60px;">❓</p>
-        <h2 style="color: #3b82f6;">المساعدة</h2>
-    </div>
-    <div class="card">
-        <h3>📖 الأوامر</h3>
-        <p><code>/start</code> - القائمة الرئيسية</p>
-        <p><code>/id</code> - عرض آيديك</p>
-        <p><code>/help</code> - المساعدة</p>
-    </div>
-    <div class="card">
-        <h3>📞 تواصل</h3>
-        <div class="grid">
-            <a href="https://t.me/{DEVELOPER_USERNAME}" class="btn btn-primary" target="_blank">👨‍💻 المطور</a>
-            <a href="https://t.me/E_E_72" class="btn btn-danger" target="_blank">👑 الأدمن</a>
-        </div>
-    </div>
-    <a href="/" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="المساعدة")
-
-
-# ===== لوحة الأدمن =====
-@app.route('/admin')
-@admin_required
-def admin_dashboard():
-    pc = get_product_count()
-    users_count = count_users()
     rate = get_exchange_rate()
+    bot.reply_to(
+        message,
+        f"💳 **شحن الرصيد**\n\n"
+        f"💱 سعر الصرف: 1$ = {rate} ⭐\n"
+        f"🪙 1 سنت = {rate/100:.2f} نجمة\n\n"
+        f"اختر المبلغ:",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.message_handler(func=lambda message: message.text == "❓ مساعدة")
+def btn_help(message):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📞 تواصل مع الدعم", url=f"https://t.me/{DEVELOPER_USERNAME}", style="success"),
+        types.InlineKeyboardButton("👑 الأدمن", url=f"https://t.me/E_E_72", style="danger")
+    )
     
-    with db() as conn:
-        sales_count = conn.execute("SELECT COUNT(*) c FROM sales").fetchone()["c"]
-        sales_sum = conn.execute("SELECT COALESCE(SUM(amount_usd),0) s FROM sales WHERE status='completed'").fetchone()["s"]
+    bot.reply_to(
+        message,
+        f"❓ **المساعدة**\n\n"
+        f"🔹 /start - القائمة الرئيسية\n"
+        f"🔹 /id - عرض آيديك\n"
+        f"🔹 /help - المساعدة\n\n"
+        f"👇 **للتواصل اضغط الزر:**",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.message_handler(func=lambda message: message.text == "🎁 شارك واربح")
+def btn_share(message):
+    """عرض رابط الإحالة"""
+    user_id = str(message.from_user.id)
+    user = get_user(user_id)
     
-    content = f'''
-    <div class="card" style="border-color: #f59e0b;">
-        <h2 style="color: #f59e0b;">⚙️ لوحة التحكم</h2>
-    </div>
-    <div class="card">
-        <div class="stats">
-            <div class="stat"><div class="num">{pc['available']}</div><div class="label">منتج</div></div>
-            <div class="stat"><div class="num">{users_count}</div><div class="label">مستخدم</div></div>
-            <div class="stat"><div class="num">{sales_count}</div><div class="label">بيع</div></div>
-            <div class="stat"><div class="num">{sales_sum:.2f}$</div><div class="label">المبيعات</div></div>
-        </div>
-    </div>
-    <div class="card">
-        <div class="grid">
-            <a href="/admin/products" class="btn btn-primary">📦 المنتجات</a>
-            <a href="/admin/users" class="btn btn-success">👥 المستخدمين</a>
-            <a href="/admin/sales" class="btn btn-primary">📋 المبيعات</a>
-            <a href="/admin/charge_prices" class="btn btn-success">💲 أسعار الشحن</a>
-            <a href="/admin/settings" class="btn btn-warning">⚙️ الإعدادات</a>
-        </div>
-    </div>
-    <a href="/" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="لوحة التحكم")
-
-
-@app.route('/admin/products')
-@admin_required
-def admin_products():
-    products = get_all_products()
+    if not user:
+        bot.reply_to(message, "❌ حدث خطأ!")
+        return
     
-    html = ""
-    for p in products:
-        html += f'''
-        <div class="card">
-            <p style="color: #3b82f6; font-weight: 700;">🆔 {p['id']} - {p['name']}</p>
-            <p style="color: #10b981;">💰 {p['price_usd']}$</p>
-            <p style="color: #94a3b8; font-size: 12px;">📦 {p['stock']} | {p['sale_type']}</p>
-            <form method="POST" action="/admin/products/delete/{p['id']}" style="margin-top: 8px;" onsubmit="return confirm('حذف؟')">
-                <button type="submit" class="btn btn-danger" style="padding: 8px 14px; font-size: 12px;">🗑️ حذف</button>
-            </form>
-        </div>
-        '''
+    if not is_referral_enabled():
+        bot.reply_to(message, "❌ الميزة معطلة حالياً!")
+        return
     
-    content = f'''
-    <div class="card"><h2>📦 المنتجات ({len(products)})</h2></div>
-    <div class="card" style="border-color: #10b981;">
-        <h3>➕ إضافة منتج</h3>
-        <form method="POST" action="/admin/products/add" style="margin-top: 12px;">
-            <input type="text" name="name" class="input" placeholder="الاسم" required>
-            <textarea name="description" class="input" placeholder="الوصف" rows="2"></textarea>
-            <input type="number" step="0.01" name="price_usd" class="input" placeholder="السعر بالدولار" required>
-            <input type="number" name="stock" class="input" value="1" required>
-            <input type="text" name="category" class="input" value="عام">
-            <select name="sale_type" class="input">
-                <option value="auto">⚡ تلقائي</option>
-                <option value="manual">🤝 يدوي</option>
-            </select>
-            <input type="text" name="code" class="input" placeholder="الكود">
-            <input type="text" name="file_id" class="input" placeholder="file_id (اختياري)">
-            <button type="submit" class="btn btn-success btn-block">➕ إضافة</button>
-        </form>
-    </div>
-    {html}
-    <a href="/admin" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="إدارة المنتجات")
-
-
-@app.route('/admin/products/add', methods=['POST'])
-@admin_required
-def admin_add_product_route():
-    try:
-        add_product(
-            name=request.form.get('name', '').strip(),
-            description=request.form.get('description', '').strip(),
-            price_usd=float(request.form.get('price_usd', 0)),
-            category=request.form.get('category', 'عام'),
-            code=request.form.get('code', '').strip(),
-            stock=int(request.form.get('stock', 1)),
-            sale_type=request.form.get('sale_type', 'auto'),
-            file_id=request.form.get('file_id') or None
-        )
-        flash("✅ تمت الإضافة", "success")
-    except Exception as e:
-        flash(f"❌ خطأ: {e}", "error")
-    return redirect(url_for('admin_products'))
-
-
-@app.route('/admin/products/delete/<int:pid>', methods=['POST'])
-@admin_required
-def admin_delete_product_route(pid):
-    delete_product(pid)
-    flash("✅ تم الحذف", "success")
-    return redirect(url_for('admin_products'))
-
-
-@app.route('/admin/users')
-@admin_required
-def admin_users():
-    data = get_all_users()
-    html = ""
-    for u in data['users']:
-        html += f'''
-        <div class="card">
-            <p style="color: #3b82f6;">🆔 {u['user_id']}</p>
-            <p style="color: #94a3b8; font-size: 12px;">👤 {u['first_name'] or u['username'] or 'مستخدم'}</p>
-            <p style="color: #10b981; font-weight: 700;">💰 {u['balance_usd']:.2f}$</p>
-        </div>
-        '''
+    bot_username = bot.get_me().username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     
-    content = f'''
-    <div class="card"><h2>👥 المستخدمين ({data['total']})</h2></div>
-    <div class="card" style="border-color: #10b981;">
-        <h3>💰 شحن رصيد</h3>
-        <form method="POST" action="/admin/users/charge">
-            <input type="text" name="user_id" class="input" placeholder="آيدي المستخدم" required>
-            <input type="number" step="0.01" name="amount" class="input" placeholder="المبلغ" required>
-            <button type="submit" class="btn btn-success btn-block">💰 شحن</button>
-        </form>
-    </div>
-    {html}
-    <a href="/admin" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="المستخدمين")
-
-
-@app.route('/admin/users/charge', methods=['POST'])
-@admin_required
-def admin_charge_user_route():
-    uid = request.form.get('user_id', '').strip()
-    try:
-        amount = float(request.form.get('amount', 0))
-        if uid and amount > 0 and get_user(uid):
-            add_balance_usd(uid, amount)
-            flash(f"✅ تم إضافة {amount}$ لـ {uid}", "success")
-        else:
-            flash("❌ بيانات غير صحيحة", "error")
-    except:
-        flash("❌ خطأ", "error")
-    return redirect(url_for('admin_users'))
-
-
-@app.route('/admin/sales')
-@admin_required
-def admin_sales():
-    sales = get_all_sales()
-    html = ""
-    for s in sales:
-        st = "✅" if s['status'] == 'completed' else "⏳" if s['status'] == 'pending' else "❌"
-        html += f'''
-        <div class="card">
-            <p>🆔 #{s['id']} {st}</p>
-            <p style="color: #94a3b8; font-size: 12px;">👤 {s['buyer_id']}</p>
-            <p style="color: #10b981;">💰 {s['amount_usd']}$</p>
-            <p style="font-size: 11px; color: #64748b;">{s['sold_at']}</p>
-        </div>
-        '''
-    content = f'<div class="card"><h2>📋 المبيعات ({len(sales)})</h2></div>{html}<a href="/admin" class="btn btn-danger btn-block">🔙 رجوع</a>'
-    return render_page(content, title="المبيعات")
-
-
-@app.route('/admin/charge_prices')
-@admin_required
-def admin_charge_prices():
-    prices = get_charge_prices()
-    html = ""
-    for p in prices:
-        html += f'''
-        <div class="card">
-            <p style="color: #10b981; font-weight: 700;">💵 {p['amount_usd']}$ = ⭐ {p['amount_stars']}</p>
-            <form method="POST" action="/admin/charge_prices/delete/{p['id']}" style="margin-top: 8px;" onsubmit="return confirm('حذف؟')">
-                <button type="submit" class="btn btn-danger" style="padding: 8px 14px;">🗑️</button>
-            </form>
-        </div>
-        '''
+    stats = get_user_referrals(user_id)
+    daily = get_daily_referrals(user_id)
+    daily_limit = get_referral_daily_limit()
+    reward = get_referral_reward()
     
-    content = f'''
-    <div class="card"><h2>💲 أسعار الشحن</h2></div>
-    <div class="card" style="border-color: #10b981;">
-        <h3>➕ إضافة</h3>
-        <form method="POST" action="/admin/charge_prices/add">
-            <input type="number" step="0.01" name="amount_usd" class="input" placeholder="الدولار" required>
-            <input type="number" name="amount_stars" class="input" placeholder="النجوم" required>
-            <button type="submit" class="btn btn-success btn-block">➕ إضافة</button>
-        </form>
-    </div>
-    {html}
-    <a href="/admin" class="btn btn-danger btn-block">🔙 رجوع</a>
-    '''
-    return render_page(content, title="أسعار الشحن")
+    text = f"""
+🎁 **شارك واربح**
 
+💰 **المكافأة/صديق:** {reward:.2f}$
+👥 **إحالاتك:** {stats['count']}
+💵 **إجمالي الأرباح:** {stats['total_earned']:.2f}$
+📅 **إحالات اليوم:** {daily}/{daily_limit}
 
-@app.route('/admin/charge_prices/add', methods=['POST'])
-@admin_required
-def admin_add_charge_price_route():
-    try:
-        add_charge_price(float(request.form.get('amount_usd', 0)), int(request.form.get('amount_stars', 0)))
-        flash("✅ تمت الإضافة", "success")
-    except:
-        flash("❌ خطأ", "error")
-    return redirect(url_for('admin_charge_prices'))
-
-
-@app.route('/admin/charge_prices/delete/<int:pid>', methods=['POST'])
-@admin_required
-def admin_delete_charge_price_route(pid):
-    delete_charge_price(pid)
-    flash("✅ تم الحذف", "success")
-    return redirect(url_for('admin_charge_prices'))
-
-
-@app.route('/admin/settings', methods=['GET', 'POST'])
-@admin_required
-def admin_settings():
-    if request.method == 'POST':
-        for key in ['store_name', 'exchange_rate', 'referral_reward',
-                    'referral_daily_limit', 'referral_enabled', 'bot_username']:
-            val = request.form.get(key)
-            if val is not None:
-                set_setting(key, val)
-        flash("✅ تم الحفظ", "success")
-        return redirect(url_for('admin_settings'))
+🔗 **رابطك:**
+`{referral_link}`
+"""
     
-    content = f'''
-    <div class="card"><h2>⚙️ الإعدادات</h2></div>
-    <form method="POST">
-        <div class="card">
-            <h3>🏪 المتجر</h3>
-            <input type="text" name="store_name" class="input" value="{get_setting('store_name', '')}">
-            <input type="text" name="bot_username" class="input" value="{get_setting('bot_username', '')}">
-            <input type="number" name="exchange_rate" class="input" value="{get_setting('exchange_rate', '50')}">
-        </div>
-        <div class="card">
-            <h3>🎁 الإحالات</h3>
-            <input type="number" step="0.01" name="referral_reward" class="input" value="{get_setting('referral_reward', '0.05')}">
-            <input type="number" name="referral_daily_limit" class="input" value="{get_setting('referral_daily_limit', '10')}">
-            <select name="referral_enabled" class="input">
-                <option value="1" {'selected' if get_setting('referral_enabled') == '1' else ''}>✅ مفعلة</option>
-                <option value="0" {'selected' if get_setting('referral_enabled') == '0' else ''}>❌ معطلة</option>
-            </select>
-        </div>
-        <button type="submit" class="btn btn-success btn-block">💾 حفظ</button>
-    </form>
-    <a href="/admin" class="btn btn-danger btn-block" style="margin-top: 12px;">🔙 رجوع</a>
-    '''
-    return render_page(content, title="الإعدادات")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📋 نسخ ومشاركة", url=f"https://t.me/share/url?url={referral_link}&text=انضم!", style="success")
+    )
+    
+    bot.reply_to(message, text, parse_mode="Markdown", reply_markup=markup)
 
+@bot.message_handler(func=lambda message: message.text == "🔄 تشغيل البوت")
+def btn_restart(message):
+    """إعادة تشغيل البوت"""
+    start_cmd(message)
 
-@app.route('/api/me')
-def api_me():
-    if 'user_id' not in session:
-        return jsonify({"ok": False}), 401
-    return jsonify({"ok": True, "user": get_user(session['user_id'])})
-
-
-# =========================================================
-# ========== التشغيل الرئيسي ==============================
-# =========================================================
+# ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    print("=" * 60)
-    print("🚀 بدء النظام الكامل")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🌐 المنفذ: {PORT}")
-    print(f"🌐 URL: {WEBAPP_URL}")
-    print("=" * 60)
+    # ===== Web Server للمراقبة =====
+    from flask import Flask
+    import threading
     
-    # 1. قاعدة البيانات
-    print("\n📌 [1/3] تهيئة قاعدة البيانات...")
-    init_db()
-    print("✅ قاعدة البيانات جاهزة")
+    bot_web = Flask(__name__)
     
-    # 2. البوت
-    print("\n📌 [2/3] تشغيل البوت...")
-    bot_thread = threading.Thread(target=run_bot, name="BotThread", daemon=True)
-    bot_thread.start()
+    # متغير عام لحالة البوت (يُحدّث من الـ polling thread)
+    bot_status = {
+        'running': False,
+        'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'last_poll': None
+    }
     
-    # 3. الموقع
-    print("\n📌 [3/3] تشغيل الموقع...")
-    print(f"🌐 الموقع على http://0.0.0.0:{PORT}")
-    print("=" * 60)
-    print("\n✅ كل شيء شغال!")
-    print("⚠️ اضغط Ctrl+C للإيقاف\n")
+    @bot_web.route('/')
+    @bot_web.route('/health')
+    def health():
+        """Health check حقيقي — يفحص هل البوت يستقبل رسائل"""
+        return {
+            'status': 'ok' if bot_status['running'] else 'starting',
+            'bot': 'running' if bot_status['running'] else 'initializing',
+            'started_at': bot_status['started_at'],
+            'last_poll': bot_status['last_poll'],
+            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }, 200 if bot_status['running'] else 503
     
-    try:
-        app.run(
-            host="0.0.0.0",
-            port=PORT,
+    @bot_web.route('/ping')
+    def ping():
+        """endpoint سريع جداً لـ UptimeRobot"""
+        return "pong", 200
+    
+    def run_web():
+        port = int(os.environ.get('PORT', 5000))
+        print(f"🌐 Web Server شغال على المنفذ {port}")
+        bot_web.run(
+            host='0.0.0.0',
+            port=port,
             debug=False,
             threaded=True,
-            use_reloader=False
+            use_reloader=False  # مهم جداً — يمنع تشغيل البوت مرتين
         )
-    except KeyboardInterrupt:
-        print("\n🛑 إيقاف...")
+    
+    # ===== قاعدة البيانات =====
+    init_db()
+    
+    # ===== تسجيل الأوامر =====
+    try:
+        bot.set_my_commands([
+            BotCommand("start", "🏠 بدء البوت"),
+            BotCommand("menu", "📋 عرض القائمة"),
+            BotCommand("id", "🆔 عرض آيديك"),
+            BotCommand("help", "❓ المساعدة"),
+        ])
+        print("✅ تم تسجيل الأوامر في Telegram")
+    except Exception as e:
+        print(f"❌ خطأ في تسجيل الأوامر: {e}")
+    
+    # ===== معلومات التشغيل =====
+    rate = get_exchange_rate()
+    print("🚀 البوت شغال...")
+    print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
+    print(f"👥 المطورين الإضافيين: {len(get_all_admins())}")
+    print(f"💱 سعر الصرف: {rate} ⭐ = 1$")
+    print(f"🪙 1 سنت = {rate/100:.2f} نجمة")
+    print(f"👨‍💻 المطور: @{DEVELOPER_USERNAME}")
+    print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
+    print(f"📢 القناة: {get_channel_id()}")
+    
+    # ===== حذف Webhook (مرة واحدة قبل polling) =====
+    try:
+        print("🔄 جاري حذف Webhook القديم...")
+        bot.delete_webhook(drop_pending_updates=False)  # احتفظ بالرسائل المعلقة
+        print("✅ تم حذف Webhook")
+    except Exception as e:
+        print(f"⚠️ فشل حذف Webhook: {e}")
+    
+    # ===== تشغيل Web Server في Thread =====
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    print("🌐 Web Server شغال في Thread منفصل")
+    
+    # ===== تشغيل البوت (Polling) =====
+    bot_status['running'] = True
+    print("🚀 البوت يبدأ استقبال الرسائل...")
+    
+    while True:
+        try:
+            # ✅ تنظيف أي webhook معلق
+            try:
+                bot.delete_webhook(drop_pending_updates=False)
+            except:
+                pass
+            
+            # ✅ infinity_polling مع إعدادات صحيحة
+            bot.infinity_polling(
+                timeout=30,              # زيادة timeout لتجنب انقطاع الاتصال
+                long_polling_timeout=20, # وقت انتظار الرد من تيليجرام
+                none_stop=True,          # ✅ لا يتوقف عند أي خطأ — يعيد المحاولة
+                skip_pending=False,      # يعالج الرسائل المعلقة
+                restart_on_change=False  # لا يعيد التشغيل لو تغير الملف
+            )
+        except Exception as e:
+            print(f"❌ خطأ في Polling: {e}")
+            bot_status['last_poll'] = f"error: {e}"
+            print("⏳ إعادة المحاولة بعد 5 ثوان...")
+            time.sleep(5)
