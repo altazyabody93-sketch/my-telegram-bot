@@ -12,7 +12,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 # ========== الإعدادات ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = "8814038881:AAGyuACUYA4YPKlJQhAyUMkpRNiV0u1gNuU"
 ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
 DEVELOPER_USERNAME = "MO_5_H"
 DB_PATH = "store.db"
@@ -2994,55 +2994,26 @@ def btn_share(message):
 def btn_restart(message):
     """إعادة تشغيل البوت"""
     start_cmd(message)
-#========تشغيل البوت========
+# ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    import flask
-    from threading import Thread
-
-    # init_db() موجودة بالفعل في الكود
     init_db()
     rate = get_exchange_rate()
     print("🚀 البوت شغال...")
     print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
     print(f"👨‍💻 المطور: @{DEVELOPER_USERNAME}")
+    print(f"💱 سعر الصرف: {rate} ⭐ = 1$")
 
-    # ========== Flask Server للـ Webhook ==========
-    app = flask.Flask(__name__)
-
-    @app.route('/')
-    def index():
-        return "✅ Bot is running!"
-
-    @app.route(f'/{BOT_TOKEN}', methods=['POST'])
-    def webhook():
-        if flask.request.headers.get('content-type') == 'application/json':
-            json_string = flask.request.get_data().decode('utf-8')
-            update = telebot.types.Update.de_json(json_string)
-            bot.process_new_updates([update])
-            return '', 200
-        return '', 403
-
-    # ========== تشغيل السيرفر ==========
-    PORT = int(os.environ.get("PORT", 8080))
-    RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
-
-    def run_flask():
-        app.run(host="0.0.0.0", port=PORT)
-
-    Thread(target=run_flask, daemon=True).start()
-
-    # ========== ربط Webhook ==========
-    if RENDER_URL:
-        # حذف webhook القديم
+    # احذف أي webhook قديم
+    try:
         bot.remove_webhook()
         time.sleep(1)
-        # تعيين webhook الجديد
-        webhook_url = f"{RENDER_URL}/{BOT_TOKEN}"
-        bot.set_webhook(url=webhook_url)
-        print(f"✅ Webhook: {webhook_url}")
-    else:
-        print("⚠️ لم يتم العثور على RENDER_EXTERNAL_URL")
+    except:
+        pass
 
-    # إبقاء العملية شغالة
+    # polling عادي (مثل Termux)
     while True:
-        time.sleep(60)
+        try:
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception as e:
+            print(f"❌ خطأ: {e}")
+            time.sleep(5)
