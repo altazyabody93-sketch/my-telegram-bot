@@ -19,7 +19,11 @@ bot_web = Flask(__name__)
 @bot_web.route('/')
 @bot_web.route('/health')
 def health():
-    ...
+    return {
+        'status': 'ok',
+        'bot': 'running',
+        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }, 200
 
 def run_web():
     port = int(os.environ.get('PORT', 8080))
