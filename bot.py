@@ -3048,9 +3048,13 @@ if __name__ == "__main__":
     print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
     print(f"📢 القناة: {get_channel_id()}")
     
-    # ===== تشغيل البوت =====
+        # ===== تشغيل البوت =====
     while True:
         try:
+            print("🔄 جاري تنظيف الويب هوك القديم...")
+            bot.remove_webhook()  # <--- أضف هذا السطر لحل المشكلة نهائياً
+            
+            print("🚀 البوت يبدأ استقبال الرسائل...")
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
         except Exception as e:
             print(f"❌ خطأ: {e}")
