@@ -3003,24 +3003,40 @@ if __name__ == "__main__":
     
     bot_web = Flask(__name__)
     
+    # متغير عام لحالة البوت (يُحدّث من الـ polling thread)
+    bot_status = {
+        'running': False,
+        'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'last_poll': None
+    }
+    
     @bot_web.route('/')
     @bot_web.route('/health')
     def health():
+        """Health check حقيقي — يفحص هل البوت يستقبل رسائل"""
         return {
-            'status': 'ok',
-            'bot': 'running',
+            'status': 'ok' if bot_status['running'] else 'starting',
+            'bot': 'running' if bot_status['running'] else 'initializing',
+            'started_at': bot_status['started_at'],
+            'last_poll': bot_status['last_poll'],
             'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }, 200
+        }, 200 if bot_status['running'] else 503
+    
+    @bot_web.route('/ping')
+    def ping():
+        """endpoint سريع جداً لـ UptimeRobot"""
+        return "pong", 200
     
     def run_web():
         port = int(os.environ.get('PORT', 5000))
         print(f"🌐 Web Server شغال على المنفذ {port}")
-        bot_web.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-    
-    # ===== تشغيل Web Server في Thread =====
-    web_thread = threading.Thread(target=run_web, daemon=True)
-    web_thread.start()
-    print("🌐 Web Server شغال في Thread منفصل")
+        bot_web.run(
+            host='0.0.0.0',
+            port=port,
+            debug=False,
+            threaded=True,
+            use_reloader=False  # مهم جداً — يمنع تشغيل البوت مرتين
+        )
     
     # ===== قاعدة البيانات =====
     init_db()
@@ -3037,6 +3053,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ خطأ في تسجيل الأوامر: {e}")
     
+    # ===== معلومات التشغيل =====
     rate = get_exchange_rate()
     print("🚀 البوت شغال...")
     print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
@@ -3047,20 +3064,41 @@ if __name__ == "__main__":
     print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
     print(f"📢 القناة: {get_channel_id()}")
     
-    # ===== حذف Webhook مرة وحدة قبل التشغيل =====
+    # ===== حذف Webhook (مرة واحدة قبل polling) =====
     try:
         print("🔄 جاري حذف Webhook القديم...")
-        bot.remove_webhook()
+        bot.delete_webhook(drop_pending_updates=False)  # احتفظ بالرسائل المعلقة
         print("✅ تم حذف Webhook")
-        time.sleep(1)
     except Exception as e:
         print(f"⚠️ فشل حذف Webhook: {e}")
     
-    # ===== تشغيل البوت =====
+    # ===== تشغيل Web Server في Thread =====
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    print("🌐 Web Server شغال في Thread منفصل")
+    
+    # ===== تشغيل البوت (Polling) =====
+    bot_status['running'] = True
+    print("🚀 البوت يبدأ استقبال الرسائل...")
+    
     while True:
         try:
-            print("🚀 البوت يبدأ استقبال الرسائل...")
-            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+            # ✅ تنظيف أي webhook معلق
+            try:
+                bot.delete_webhook(drop_pending_updates=False)
+            except:
+                pass
+            
+            # ✅ infinity_polling مع إعدادات صحيحة
+            bot.infinity_polling(
+                timeout=30,              # زيادة timeout لتجنب انقطاع الاتصال
+                long_polling_timeout=20, # وقت انتظار الرد من تيليجرام
+                none_stop=True,          # ✅ لا يتوقف عند أي خطأ — يعيد المحاولة
+                skip_pending=False,      # يعالج الرسائل المعلقة
+                restart_on_change=False  # لا يعيد التشغيل لو تغير الملف
+            )
         except Exception as e:
-            print(f"❌ خطأ: {e}")
+            print(f"❌ خطأ في Polling: {e}")
+            bot_status['last_poll'] = f"error: {e}"
+            print("⏳ إعادة المحاولة بعد 5 ثوان...")
             time.sleep(5)
