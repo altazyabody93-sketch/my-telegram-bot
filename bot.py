@@ -10,26 +10,9 @@ from datetime import datetime
 from telebot.types import BotCommand
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# ✅ إضافات Web Server
-from flask import Flask
-import threading
-# ========== Web Server للمراقبة ==========
-bot_web = Flask(__name__)
 
-@bot_web.route('/')
-@bot_web.route('/health')
-def health():
-    return {
-        'status': 'ok',
-        'bot': 'running',
-        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    }, 200
-
-def run_web():
-    port = int(os.environ.get('PORT', 8080))
-    bot_web.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 # ========== الإعدادات ==========
-BOT_TOKEN = "8971686005:AAH3WZesb9tlUtswhi-tX3v0jRhw70Lopcg"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAH3WZesb9tlUtswhi-tX3v0jRhw70Lopcg")
 ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
 DEVELOPER_USERNAME = "MO_5_H"
 DB_PATH = "store.db"
@@ -3014,14 +2997,36 @@ def btn_restart(message):
 
 # ========== تشغيل البوت ==========
 if __name__ == "__main__":
-    init_db()
+    # ===== Web Server للمراقبة =====
+    from flask import Flask
+    import threading
     
-    # ✅ تشغيل Web Server في Thread
+    bot_web = Flask(__name__)
+    
+    @bot_web.route('/')
+    @bot_web.route('/health')
+    def health():
+        return {
+            'status': 'ok',
+            'bot': 'running',
+            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }, 200
+    
+    def run_web():
+        # ✅ Render يعطي PORT تلقائياً — محلياً 5000
+        port = int(os.environ.get('PORT', 5000))
+        print(f"🌐 Web Server شغال على المنفذ {port}")
+        bot_web.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    
+    # ===== تشغيل Web Server في Thread =====
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     print("🌐 Web Server شغال في Thread منفصل")
     
-    # تسجيل قائمة الأوامر في Telegram
+    # ===== قاعدة البيانات =====
+    init_db()
+    
+    # ===== تسجيل الأوامر =====
     try:
         bot.set_my_commands([
             BotCommand("start", "🏠 بدء البوت"),
@@ -3043,6 +3048,7 @@ if __name__ == "__main__":
     print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
     print(f"📢 القناة: {get_channel_id()}")
     
+    # ===== تشغيل البوت =====
     while True:
         try:
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
