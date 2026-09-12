@@ -12,7 +12,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 # ========== الإعدادات ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8971686005:AAH3WZesb9tlUtswhi-tX3v0jRhw70Lopcg")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8858406129:AAFPo6JkUTa8sf26HFILboVYp5whUA8LD3Q")
 ADMIN_IDS = ["7325566792", "7602226699", "E_E_72"]
 DEVELOPER_USERNAME = "MO_5_H"
 DB_PATH = "store.db"
