@@ -3003,24 +3003,21 @@ if __name__ == "__main__":
     
     bot_web = Flask(__name__)
     
-    # متغير عام لحالة البوت (يُحدّث من الـ polling thread)
     bot_status = {
         'running': False,
-        'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'last_poll': None
+        'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
     @bot_web.route('/')
     @bot_web.route('/health')
     def health():
-        """Health check حقيقي — يفحص هل البوت يستقبل رسائل"""
+        """Health check لـ UptimeRobot"""
         return {
             'status': 'ok' if bot_status['running'] else 'starting',
             'bot': 'running' if bot_status['running'] else 'initializing',
             'started_at': bot_status['started_at'],
-            'last_poll': bot_status['last_poll'],
             'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }, 200 if bot_status['running'] else 503
+        }, 200
     
     @bot_web.route('/ping')
     def ping():
@@ -3035,7 +3032,7 @@ if __name__ == "__main__":
             port=port,
             debug=False,
             threaded=True,
-            use_reloader=False  # مهم جداً — يمنع تشغيل البوت مرتين
+            use_reloader=False  # مهم — يمنع تشغيل مزدوج
         )
     
     # ===== قاعدة البيانات =====
@@ -3049,56 +3046,45 @@ if __name__ == "__main__":
             BotCommand("id", "🆔 عرض آيديك"),
             BotCommand("help", "❓ المساعدة"),
         ])
-        print("✅ تم تسجيل الأوامر في Telegram")
+        print("✅ تم تسجيل الأوامر")
     except Exception as e:
-        print(f"❌ خطأ في تسجيل الأوامر: {e}")
+        print(f"⚠️ {e}")
     
     # ===== معلومات التشغيل =====
     rate = get_exchange_rate()
-    print("🚀 البوت شغال...")
+    print("=" * 50)
+    print("🚀 النظام يبدأ...")
     print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
-    print(f"👥 المطورين الإضافيين: {len(get_all_admins())}")
     print(f"💱 سعر الصرف: {rate} ⭐ = 1$")
-    print(f"🪙 1 سنت = {rate/100:.2f} نجمة")
     print(f"👨‍💻 المطور: @{DEVELOPER_USERNAME}")
-    print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
-    print(f"📢 القناة: {get_channel_id()}")
+    print("=" * 50)
     
-    # ===== حذف Webhook (مرة واحدة قبل polling) =====
+    # ===== حذف Webhook مرة واحدة فقط (خارج الحلقة!) =====
     try:
-        print("🔄 جاري حذف Webhook القديم...")
-        bot.delete_webhook(drop_pending_updates=False)  # احتفظ بالرسائل المعلقة
-        print("✅ تم حذف Webhook")
+        print("🔄 حذف Webhook...")
+        bot.delete_webhook(drop_pending_updates=False)
+        print("✅ تم")
     except Exception as e:
-        print(f"⚠️ فشل حذف Webhook: {e}")
+        print(f"⚠️ {e}")
     
     # ===== تشغيل Web Server في Thread =====
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     print("🌐 Web Server شغال في Thread منفصل")
     
-    # ===== تشغيل البوت (Polling) =====
+    # ===== تشغيل Polling (بدون delete_webhook داخل الحلقة) =====
     bot_status['running'] = True
     print("🚀 البوت يبدأ استقبال الرسائل...")
     
     while True:
         try:
-            # ✅ تنظيف أي webhook معلق
-            try:
-                bot.delete_webhook(drop_pending_updates=False)
-            except:
-                pass
-            
-            # ✅ infinity_polling مع إعدادات صحيحة
             bot.infinity_polling(
-                timeout=30,              # زيادة timeout لتجنب انقطاع الاتصال
-                long_polling_timeout=20, # وقت انتظار الرد من تيليجرام
-                none_stop=True,          # ✅ لا يتوقف عند أي خطأ — يعيد المحاولة
-                skip_pending=False,      # يعالج الرسائل المعلقة
-                restart_on_change=False  # لا يعيد التشغيل لو تغير الملف
+                timeout=30,
+                long_polling_timeout=20,
+                none_stop=True,
+                skip_pending=False
             )
         except Exception as e:
             print(f"❌ خطأ في Polling: {e}")
-            bot_status['last_poll'] = f"error: {e}"
             print("⏳ إعادة المحاولة بعد 5 ثوان...")
             time.sleep(5)
