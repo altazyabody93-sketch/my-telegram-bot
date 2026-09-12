@@ -3003,18 +3003,12 @@ if __name__ == "__main__":
     
     bot_web = Flask(__name__)
     
-    bot_status = {
-        'running': False,
-        'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    }
-    
     @bot_web.route('/')
     @bot_web.route('/health')
     def health():
         return {
-            'status': 'ok' if bot_status['running'] else 'starting',
-            'bot': 'running' if bot_status['running'] else 'initializing',
-            'started_at': bot_status['started_at'],
+            'status': 'ok',
+            'bot': 'running',
             'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }, 200
     
@@ -3033,10 +3027,23 @@ if __name__ == "__main__":
             use_reloader=False
         )
     
-    # ===== 1. قاعدة البيانات =====
+    # ===== قاعدة البيانات =====
     init_db()
     
-    # ===== 2. تسجيل الأوامر =====
+    # ===== معلومات التشغيل =====
+    rate = get_exchange_rate()
+    print("=" * 50)
+    print("🚀 البوت شغال...")
+    print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
+    print(f"👥 المطورين الإضافيين: {len(get_all_admins())}")
+    print(f"💱 سعر الصرف: {rate} ⭐ = 1$")
+    print(f"🪙 1 سنت = {rate/100:.2f} نجمة")
+    print(f"👨‍💻 المطور: @{DEVELOPER_USERNAME}")
+    print(f"💲 عدد أسعار الشحن: {len(get_charge_prices())}")
+    print(f"📢 القناة: {get_channel_id()}")
+    print("=" * 50)
+    
+    # ===== تسجيل الأوامر =====
     try:
         bot.set_my_commands([
             BotCommand("start", "🏠 بدء البوت"),
@@ -3048,33 +3055,24 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ {e}")
     
-    # ===== 3. معلومات =====
-    rate = get_exchange_rate()
-    print("=" * 50)
-    print("🚀 النظام يبدأ...")
-    print(f"👑 الأدمن: {', '.join(ADMIN_IDS)}")
-    print(f"💱 سعر الصرف: {rate} ⭐ = 1$")
-    print("=" * 50)
-    
-    # ===== 4. حذف Webhook (مع تنظيف كامل) =====
+    # ===== حذف Webhook مرة واحدة =====
     try:
         print("🔄 حذف Webhook...")
-        bot.delete_webhook(drop_pending_updates=True)  # ← True مهم!
-        print("✅ تم حذف Webhook")
+        bot.delete_webhook(drop_pending_updates=True)
+        print("✅ تم")
     except Exception as e:
         print(f"⚠️ {e}")
     
-    # ===== 5. تشغيل Web Server =====
+    # ===== تشغيل Flask في Thread =====
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     print("🌐 Web Server شغال في Thread منفصل")
     
-    # ===== 6. انتظار قبل polling (مهم لمنع 409) =====
-    print("⏳ انتظار 8 ثواني قبل تشغيل polling...")
-    time.sleep(8)
+    # ===== انتظار قبل polling =====
+    print("⏳ انتظار 5 ثواني...")
+    time.sleep(5)
     
-    # ===== 7. تشغيل Polling =====
-    bot_status['running'] = True
+    # ===== تشغيل البوت =====
     print("🚀 البوت يبدأ استقبال الرسائل...")
     
     while True:
@@ -3083,9 +3081,9 @@ if __name__ == "__main__":
                 timeout=30,
                 long_polling_timeout=20,
                 none_stop=True,
-                skip_pending=True  # ← True لمنع معالجة رسائل قديمة
+                skip_pending=True
             )
         except Exception as e:
-            print(f"❌ خطأ في Polling: {e}")
+            print(f"❌ خطأ: {e}")
             print("⏳ إعادة المحاولة بعد 10 ثواني...")
             time.sleep(10)
