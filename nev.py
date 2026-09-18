@@ -280,7 +280,7 @@ def _create_tables() -> None:
         secondary  TEXT DEFAULT '#229ED9',
         accent     TEXT DEFAULT '#FFFFFF',
         background TEXT DEFAULT '#17212B',
-        text       TEXT DEFAULT '#FFFFFF',
+        "text"     TEXT DEFAULT '#FFFFFF',
         success    TEXT DEFAULT '#4CAF50',
         warning    TEXT DEFAULT '#FFC107',
         error      TEXT DEFAULT '#F44336',
