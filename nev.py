@@ -3505,18 +3505,28 @@ async def main() -> None:
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-
 # ------------------------------------------------------------
 # 8.11 - نقطة الدخول
 # ------------------------------------------------------------
+def run_bot_thread():
+    """يشغّل البوت في Thread منفصل"""
+    try:
+        # إنشاء event loop جديد لهذا الـ thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
+    except Exception as e:
+        log.exception("Bot thread error: %s", e)
+
+
 if __name__ == "__main__":
     try:
-        # 1) شغّل Flask في Thread منفصل
-        flask_thread = threading.Thread(target=run_flask, daemon=True)
-        flask_thread.start()
+        # 1) شغّل البوت في Thread منفصل
+        bot_thread = threading.Thread(target=run_bot_thread, daemon=True)
+        bot_thread.start()
 
-        # 2) شغّل البوت في الـ main thread
-        asyncio.run(main())
+        # 2) شغّل Flask في الـ main thread (Render ينتظر هذا)
+        run_flask()
 
     except (KeyboardInterrupt, SystemExit):
         log.info("Bot stopped by user")
