@@ -27,7 +27,7 @@ from typing import Optional
 
 
 # ---------- الإعدادات ----------
-BOT_TOKEN   = os.environ.get("BOT_TOKEN", "8247238031:AAFLQAz7OMZVgXWVUD_u9D7VaB8ViL7YwIc").strip()
+BOT_TOKEN   = os.environ.get("BOT_TOKEN", "8247238031:AAGqWzTkJyDLCXh89yqE4c3Ch3VEsj13Uq4").strip()
 ADMIN_IDS   = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "7325566792").split(",") if x.strip().isdigit()]
 DB_PATH     = os.environ.get("DB_PATH", "data/database.db")
 REFERRAL_REWARD = int(os.environ.get("REFERRAL_REWARD", "50"))
