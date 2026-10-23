@@ -8194,13 +8194,15 @@ def cb_grid2_btn(call):
     finally:
         conn.close()
 
+    # لو مش موجود في الداتابيز، استخدم قيم افتراضية
     if not r:
-        bot.answer_callback_query(call.id, "❌ غير موجود", show_alert=True)
-        return
-
-    ri = r["row_idx"]
-    ci = r["col_idx"]
-    w = r["width"] if r["width"] else 1
+        ri = 0
+        ci = 0
+        w = 1
+    else:
+        ri = r["row_idx"]
+        ci = r["col_idx"]
+        w = r["width"] if r["width"] else 1
 
     names = {
         "btn_platforms": "📱 المنصات",
@@ -8222,17 +8224,14 @@ def cb_grid2_btn(call):
 
     kb = InlineKeyboardMarkup(row_width=2)
 
-    # صفوف
     kb.add(
         btn("⬆️ صف فوق", "grd2:up:" + key, key="btn_up"),
         btn("⬇️ صف تحت", "grd2:down:" + key, key="btn_down")
     )
-    # أعمدة
     kb.add(
         btn("⬅️ عمود يسار", "grd2:left:" + key, key="btn_left"),
         btn("➡️ عمود يمين", "grd2:right:" + key, key="btn_right")
     )
-    # عرض
     kb.add(btn("➕ صف جديد أسفل", "grd2:newrow:" + key, key="btn_newrow"))
 
     if w >= 2:
@@ -8250,27 +8249,6 @@ def cb_grid2_btn(call):
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-
-
-def _grid2_update(key, **fields):
-    allowed = {"row_idx", "col_idx", "width"}
-    sets = []
-    vals = []
-    for k, v in fields.items():
-        if k in allowed:
-            sets.append(k + "=?")
-            vals.append(v)
-    if not sets:
-        return False
-    vals.append(key)
-    conn = db()
-    try:
-        conn.execute("UPDATE main_menu_grid SET " + ", ".join(sets) + " WHERE button_key=?", vals)
-        conn.commit()
-        return True
-    finally:
-        conn.close()
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:up:"))
 def cb_grd2_up(call):
