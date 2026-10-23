@@ -8134,28 +8134,40 @@ def cb_admin_layout_edit(call):
 
     text = "📐 <b>تخطيط القائمة الرئيسية</b>\n\n"
     kb = InlineKeyboardMarkup(row_width=1)
-    
+
+    # ترتيب افتراضي منطقي (صفوف وأعمدة)
+    default_layout = {
+        "btn_platforms": (0, 0),
+        "btn_last_codes": (0, 1),
+        "btn_support": (1, 0),
+        "btn_me": (1, 1),
+        "btn_explore": (2, 0),
+        "btn_settings": (2, 1),
+        "btn_admin": (3, 0),
+    }
+    default_names = {
+        "btn_platforms": "📱 المنصات",
+        "btn_last_codes": "😩 آخر الأكواد",
+        "btn_support": "💭 الدعم",
+        "btn_me": "👤 ملفي",
+        "btn_explore": "🌐 استكشف",
+        "btn_settings": "📊 الترافيك المباشر",
+        "btn_admin": "👮 لوحة الأدمن",
+    }
+
     try:
         conn = db()
         rows = conn.execute("SELECT key, label_ar, style, icon FROM button_config WHERE visible=1 ORDER BY sort_order").fetchall()
         conn.close()
-        
-        if not rows:
-            # لو الداتابيز فاضية، استخدم الأزرار الافتراضية من الكود
-            default_buttons = [
-                ("btn_platforms", "📱 المنصات"),
-                ("btn_last_codes", "😩 آخر الأكواد"),
-                ("btn_support", "💭 الدعم"),
-                ("btn_me", "👤 ملفي"),
-                ("btn_explore", "🌐 استكشف"),
-                ("btn_settings", "📊 الترافيك المباشر"),
-            ]
-            if user_is_admin(call.from_user.id):
-                default_buttons.append(("btn_admin", "👮 لوحة الأدمن"))
 
-            for k, label in default_buttons:
+        if not rows:
+            text += "☝️ اضغط أي زر لتعديله (من الأزرار الافتراضية)\n\n"
+            for k, (ri, ci) in default_layout.items():
+                if k == "btn_admin" and not user_is_admin(call.from_user.id):
+                    continue
+                label = default_names.get(k, k)
+                text += "• " + label + " — صف " + str(ri + 1) + "، عمود " + str(ci + 1) + "\n"
                 kb.add(btn(label, "grd2:btn:" + k))
-            text += "☝️ اضغط أي زر لتعديله (من الأزرار الافتراضية)"
         else:
             for r in rows:
                 k = r["key"]
@@ -8186,6 +8198,17 @@ def cb_grid2_btn(call):
 
     key = call.data.split(":", 2)[2]
 
+    # ترتيب افتراضي
+    default_layout = {
+        "btn_platforms": (0, 0, 2),
+        "btn_last_codes": (0, 1, 1),
+        "btn_support": (1, 0, 1),
+        "btn_me": (1, 1, 1),
+        "btn_explore": (2, 0, 1),
+        "btn_settings": (2, 1, 1),
+        "btn_admin": (3, 0, 1),
+    }
+
     conn = db()
     try:
         r = conn.execute("SELECT row_idx, col_idx, width FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
@@ -8194,15 +8217,12 @@ def cb_grid2_btn(call):
     finally:
         conn.close()
 
-    # لو مش موجود في الداتابيز، استخدم قيم افتراضية
-    if not r:
-        ri = 0
-        ci = 0
-        w = 1
-    else:
+    if r:
         ri = r["row_idx"]
         ci = r["col_idx"]
         w = r["width"] if r["width"] else 1
+    else:
+        ri, ci, w = default_layout.get(key, (0, 0, 1))
 
     names = {
         "btn_platforms": "📱 المنصات",
