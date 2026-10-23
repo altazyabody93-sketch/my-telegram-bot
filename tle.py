@@ -10568,36 +10568,6 @@ def _ping_loop():
 
 
 
-# ============================================================
-# 🌐 Web Server بسيط (لـ Render Web Service) — بدون Flask
-# ============================================================
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-class _HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"Matari OTP Bot is running!")
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, fmt, *args):
-        pass  # بدون طباعة لوج
-
-def _run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    try:
-        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-        print("[WEB] ✅ Server running on port " + str(port))
-        server.serve_forever()
-    except Exception as e:
-        print("[WEB] ⚠️ خطأ: " + str(e))
-
-# تشغيل السيرفر في Thread منفصل (ما يعطلش البوت)
-threading.Thread(target=_run_web_server, daemon=True).start()
 
 
 
