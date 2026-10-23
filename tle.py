@@ -3068,12 +3068,20 @@ def admin_panel(chat_id, uid, edit=None):
 def cb_admin_custom_main_menu(call):
     if not user_is_admin(call.from_user.id): return
     
-    main_keys = ["btn_platforms", "btn_last_codes", "btn_settings", "btn_me", "btn_explore", "btn_support", "btn_admin"]
+    # الأزرار الافتراضية للقائمة الرئيسية
+    main_keys = [
+        ("btn_platforms", "📱 المنصات"),
+        ("btn_last_codes", "😩 آخر الأكواد"),
+        ("btn_support", "💭 الدعم"),
+        ("btn_me", "👤 ملفي"),
+        ("btn_explore", "🌐 استكشف"),
+        ("btn_settings", "📊 الترافيك المباشر"),
+        ("btn_admin", "👮 لوحة الأدمن"),
+    ]
     
-    conn = db()
     text = "🎨 <b>تخصيص القائمة الرئيسية</b>\n\n"
     text += "هذه هي الأزرار اللي بتظهر للمستخدم في القائمة الرئيسية.\n"
-    text += "اضغط على أي زرار لتعديله:"
+    text += "اضغط على أي زرار لتعديله (يُحفظ في الذاكرة بدون داتابيز):"
     
     kb = InlineKeyboardMarkup(row_width=1)
     
@@ -3085,13 +3093,16 @@ def cb_admin_custom_main_menu(call):
         "": "⚪ افتراضي"
     }
     
-    for key in main_keys:
-        row = conn.execute("SELECT key, label_ar, style, icon FROM button_config WHERE key=?", (key,)).fetchone()
-        if not row:
+    for key, default_label in main_keys:
+        if key == "btn_admin" and not user_is_admin(call.from_user.id):
             continue
-        label = row["label_ar"] or key
-        icon = row["icon"] or ""
-        style = row["style"] or ""
+            
+        # نقرأ من الكاش أولاً، ثم من الداتابيز لو موجودة
+        cfg = btn_config_get(key)
+        
+        label = cfg.get("label_ar") or default_label
+        icon = cfg.get("icon") or ""
+        style = cfg.get("style") or ""
         
         if ":" in style:
             style = style.split(":")[0]
@@ -3100,7 +3111,6 @@ def cb_admin_custom_main_menu(call):
         display = f"{icon} {label} | {color_ar}"
         kb.add(btn(display, "bc:v:" + key))
     
-    conn.close()
     kb.add(btn("⬅️ رجوع", "admin:home"))
     
     try:
@@ -3112,9 +3122,6 @@ def cb_admin_custom_main_menu(call):
     except Exception:
         pass
 
-# ============================================================
-# 📱 تخصيص أزرار المنصات (داخل قسم المنصات)
-# ============================================================
 @bot.callback_query_handler(func=lambda c: c.data == "admin:custom_platforms")
 def cb_admin_custom_platforms(call):
     if not user_is_admin(call.from_user.id): return
