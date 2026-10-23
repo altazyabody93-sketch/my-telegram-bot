@@ -117,7 +117,7 @@ OTP_STYLES = {
 # ============================================================
 # الإعدادات
 # ============================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7331163937:AAGgHFiwE5rZ_KGHddUQZQrEBa9faiOstmo"
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7798949296:AAF_S41VvNkPyQNypCva77nDktT38Y9QPfI"
 MAIN_ADMIN_ID = 7325566792
 DB_FILE = "data/bot.db"
 PANELS_FILE = "data/panels.json"
