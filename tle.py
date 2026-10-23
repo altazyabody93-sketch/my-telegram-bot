@@ -846,6 +846,30 @@ def codes_count():
 # ============================================================
 # دوال اللوحات
 # ============================================================
+def _ensure_panel_uptime():
+    """يتأكد أن جدول ساعة اللوحات موجود (كان سبب تعطل زر عرض اللوحات)"""
+    try:
+        conn = db()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS panel_uptime (
+                panel_id INTEGER PRIMARY KEY,
+                started_at REAL DEFAULT 0,
+                stopped_at REAL DEFAULT 0,
+                total_paused REAL DEFAULT 0,
+                is_running INTEGER DEFAULT 1
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("[PANEL_UPTIME] ensure err:", e)
+
+
+def _kadd(kb, b):
+    if b is not None:
+        kb.add(b)
+
+
 def panels_list(only_enabled=False):
     conn = db()
     if only_enabled:
@@ -937,6 +961,7 @@ def build_headers(panel):
 
     if auth == "token" and token:
         h["X-API-Token"] = token
+        h["X-API-Key"] = token
         h["Authorization"] = "Bearer " + token
     elif auth == "basic" and username:
         creds = base64.b64encode((username + ":" + password).encode()).decode()
@@ -1000,10 +1025,141 @@ def extract_codes(data, panel=None):
     return []
 
 
+def panel_phone_numbers(panel, limit=30):
+    """أرقام من اللي أضفتهم (أرقام هذه اللوحة أولاً، وإلا أحدث الأرقام) بدل رقم ثابت"""
+    rows = []
+    try:
+        conn = db()
+        pid = panel.get("id")
+        if pid is not None:
+            rows = conn.execute("SELECT phone, platform FROM numbers WHERE platform LIKE ? ORDER BY id DESC LIMIT ?",
+                                ("%(Panel:" + str(pid) + ")", limit)).fetchall()
+        if not rows:
+            rows = conn.execute("SELECT phone, platform FROM numbers ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+    seen, out = set(), []
+    for r in rows:
+        ph = str(r["phone"]).strip()
+        if ph and ph not in seen:
+            seen.add(ph)
+            out.append((ph, re.sub(r"\s*\(Panel:\d+\)", "", str(r["platform"] or "")).strip()))
+    return out
+
+
+def _panel_phone_one(panel, phone, platform, headers, method, body, qparams):
+    """طلب واحد لرقم واحد. يرجع dict: phone, status, data, err"""
+    from urllib.parse import quote
+    base = (panel.get("url") or "").rstrip("/")
+    tpl = (panel.get("api_path") or "").strip()
+    if not tpl.startswith("/"):
+        tpl = "/" + tpl
+    digits = re.sub(r"\D", "", phone)
+    alt = digits if phone.startswith("+") else ("+" + digits)
+    variants = [phone] + ([alt] if digits and alt != phone else [])
+    res = {"phone": phone, "platform": platform, "status": 0, "data": None, "err": ""}
+    for v in variants:
+        url = base + tpl.replace("{phone}", quote(v, safe="+"))
+        try:
+            if method == "POST":
+                r = requests.post(url, headers=headers, params=qparams or None,
+                                  json=body if body is not None else None, timeout=12)
+            else:
+                r = requests.get(url, headers=headers, params=qparams or None, timeout=12)
+        except requests.exceptions.Timeout:
+            res["err"] = "انتهت المدة"
+            continue
+        except Exception as e:
+            res["err"] = type(e).__name__ + ": " + str(e)[:80]
+            continue
+        res["status"] = r.status_code
+        res["err"] = ""
+        if r.status_code in (401, 403):
+            return res
+        if r.status_code == 200:
+            try:
+                res["data"] = r.json()
+            except Exception:
+                res["err"] = "رد غير JSON: " + r.text[:60]
+            return res
+    return res
+
+
+def panel_phone_scan(panel, max_numbers=30):
+    """يفحص كل رقم مضاف على اللوحة بالتوازي. يرجع (numbers, results)"""
+    numbers = panel_phone_numbers(panel, max_numbers)
+    if not numbers:
+        return numbers, []
+    headers = build_headers(panel)
+    method = (panel.get("api_method") or "GET").upper()
+    body = None
+    if method == "POST":
+        bj = (panel.get("body_json") or "").strip()
+        if bj:
+            try:
+                body = json.loads(bj)
+            except Exception:
+                body = None
+            headers["Content-Type"] = "application/json"
+    qparams = {}
+    try:
+        for q in json.loads(panel.get("custom_query") or "[]"):
+            if isinstance(q, dict) and q.get("name"):
+                qparams[str(q["name"])] = str(q.get("value", ""))
+    except Exception:
+        pass
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(numbers)))) as ex:
+        results = list(ex.map(lambda t: _panel_phone_one(panel, t[0], t[1], headers, method, body, qparams), numbers))
+    return numbers, results
+
+
+def fetch_panel_phone(panel, limit=50, max_numbers=30):
+    """سحب حقيقي من لوحة OTP لكل رقم: يرجع (ok, codes, err)"""
+    numbers, results = panel_phone_scan(panel, max_numbers)
+    if not numbers:
+        return False, [], "لا توجد أرقام مضافة للفحص — أضف أرقاماً أولاً"
+    codes = []
+    reachable = False
+    auth_fail = False
+    last_err = ""
+    for r in results:
+        st = r["status"]
+        if st in (401, 403):
+            auth_fail = True
+            continue
+        if st and st < 500:
+            reachable = True
+        if r["err"]:
+            last_err = r["err"]
+        if st == 200 and r["data"] is not None:
+            try:
+                items = extract_codes(r["data"], panel)
+            except Exception:
+                items = []
+            for it in items:
+                if isinstance(it, dict):
+                    it = dict(it)
+                    it.setdefault("phone", r["phone"])
+                    if r["platform"]:
+                        it.setdefault("platform", r["platform"])
+                else:
+                    it = {"message": str(it), "phone": r["phone"], "platform": r["platform"]}
+                codes.append(it)
+    if auth_fail and not reachable:
+        return False, [], "HTTP 401/403 — التوكن أو الصلاحية غير صحيحة"
+    if not reachable:
+        return False, [], last_err or "تعذر الاتصال باللوحة"
+    return True, codes, ""
+
+
 def fetch_panel(panel, limit=50):
     base = (panel.get("url") or "").rstrip("/")
     if not base:
         return False, [], "URL فارغ"
+    if "{phone}" in (panel.get("api_path") or ""):
+        return fetch_panel_phone(panel, limit)
     headers = build_headers(panel)
     custom_path = (panel.get("api_path") or "").strip()
     if custom_path:
@@ -4161,6 +4317,7 @@ def cb_ap_toggle(call):
     panel_toggle(pid)
     
     # تحديث الساعة في الداتابيز
+    _ensure_panel_uptime()
     conn = db()
     now = time.time()
     row = conn.execute("SELECT * FROM panel_uptime WHERE panel_id=?", (pid,)).fetchone()
@@ -9786,6 +9943,7 @@ def format_uptime(seconds):
     return " و ".join(parts)
 
 def get_panel_uptime(pid, created_at):
+    _ensure_panel_uptime()
     conn = db()
     row = conn.execute("SELECT * FROM panel_uptime WHERE panel_id=?", (pid,)).fetchone()
     now = time.time()
@@ -9802,6 +9960,7 @@ def get_panel_uptime(pid, created_at):
     
     if is_running == 1:
         if started_at == 0:
+            conn.close()
             return 0
         uptime = now - started_at - total_paused
     else:
@@ -9832,7 +9991,11 @@ def cb_ap_list(call):
         is_enabled = p["enabled"]
         
         # حساب وقت التشغيل
-        uptime = get_panel_uptime(pid, p.get("created") or time.time())
+        try:
+            uptime = get_panel_uptime(pid, p.get("created") or time.time())
+        except Exception as _e:
+            print("[AP_LIST] uptime err:", _e)
+            uptime = 0
         
         # تحويل الثواني لشكل ساعة (ساعة:دقيقة:ثانية)
         hours = int(uptime // 3600)
@@ -9842,10 +10005,10 @@ def cb_ap_list(call):
         
         # زر اللوحة
         status_icon = "🟢" if is_enabled else "🔴"
-        btn_panel = _kb_btn(f"{status_icon} {p['name']}", "ap:v:" + str(pid) if is_enabled else "danger")
+        btn_panel = _kb_btn(f"{status_icon} {p['name']}", "ap:v:" + str(pid), style=("success" if is_enabled else "danger"))
         
         # زر الساعة
-        btn_timer = _kb_btn(f"⏱ {timer_text}", "noop" if is_enabled else "danger")
+        btn_timer = _kb_btn(f"⏱ {timer_text}", "noop", style=("success" if is_enabled else "danger"))
         
         if btn_panel and btn_timer:
             kb.row(btn_panel, btn_timer)
@@ -9933,6 +10096,60 @@ def cb_ap_test(call):
         bot.answer_callback_query(call.id, "جاري الفحص...")
     except Exception:
         pass
+
+    # لوحات OTP لكل رقم: فحص أرقامك المضافة (بدون رقم ثابت)
+    if "{phone}" in (p.get("api_path") or ""):
+        try:
+            numbers, results = panel_phone_scan(p, max_numbers=8)
+            text = "🔍 <b>نتيجة الفحص</b>\n\n"
+            text += "🆔 اللوحة: <b>" + html.escape(str(p.get("name") or "?")) + "</b>\n"
+            text += "📡 Method: <code>" + html.escape(str(p.get("api_method") or "GET")) + "</code>\n"
+            text += "📁 المسار: <code>" + html.escape(str(p.get("api_path"))) + "</code>\n\n"
+            if not numbers:
+                text += "⚠️ لا توجد أرقام مضافة للفحص عليها. أضف أرقاماً أولاً."
+            else:
+                found, n_codes, auth_bad = 0, 0, 0
+                lines = []
+                for r in results:
+                    st = r["status"]
+                    if st == 200 and r["data"] is not None:
+                        found += 1
+                        try:
+                            c = len(extract_codes(r["data"], p))
+                        except Exception:
+                            c = 0
+                        n_codes += c
+                        icon, note = "✅", "موجود — أكواد: " + str(c)
+                    elif st == 404:
+                        icon, note = "⚠️", "غير موجود على اللوحة"
+                    elif st in (401, 403):
+                        auth_bad += 1
+                        icon, note = "🔑", "توكن/صلاحية"
+                    elif st:
+                        icon, note = "❌", "HTTP " + str(st)
+                    else:
+                        icon, note = "❌", html.escape(r["err"] or "لا اتصال")
+                    ph = r["phone"]
+                    ph_show = ph[:4] + "•••" + ph[-3:] if len(ph) > 8 else ph
+                    lines.append(icon + " <code>" + html.escape(ph_show) + "</code> — " + note + (" [" + str(st) + "]" if st else ""))
+                text += "\n".join(lines) + "\n\n"
+                text += "📊 فُحص <b>" + str(len(results)) + "</b> رقم | موجود: <b>" + str(found) + "</b> | أكواد: <b>" + str(n_codes) + "</b>\n"
+                if auth_bad:
+                    text += "⚠️ التوكن أو الصلاحية غير صحيحة.\n"
+                elif found:
+                    text += "🟢 اللوحة شغالة والسحب حقيقي."
+                else:
+                    text += "🟡 اللوحة متصلة لكن الأرقام المفحوصة غير موجودة عليها."
+        except Exception as e:
+            text = "❌ خطأ في الفحص: " + html.escape(str(e)[:150])
+        kb = InlineKeyboardMarkup()
+        kb.add(btn("🔄 فحص مرة أخرى", "ap:t:" + str(pid), BTN.PRIMARY))
+        kb.add(btn("⬅️ رجوع", "ap:v:" + str(pid)))
+        try:
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+        return
 
     # ناخد البيانات من إعدادات اللوحة
     base = (p.get("url") or "").rstrip("/")
@@ -10604,14 +10821,14 @@ def cb_admin_panels(call):
     panels = panels_list()
     text = "📡 <b>اللوحات</b>\n\nإجمالي: " + str(len(panels))
     kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(btn("➕ إضافة لوحة (خطوات)", "ap:add", key="btn_add_panel"))
-    kb.add(btn("⚡ إضافة سريعة (نص)", "admin:quick_add", key="btn_quick_add"))
-    kb.add(btn("📚 دليل الإضافة", "admin:quick_guide", key="btn_quick_guide"))
+    _kadd(kb, btn("➕ إضافة لوحة (خطوات)", "ap:add", key="btn_add_panel"))
+    _kadd(kb, btn("⚡ إضافة سريعة (نص)", "admin:quick_add", key="btn_quick_add"))
+    _kadd(kb, btn("📚 دليل الإضافة", "admin:quick_guide", key="btn_quick_guide"))
     if panels:
-        kb.add(btn(" عرض اللوحات", "ap:list", key="btn_list_panels"))
-        kb.add(btn("🔍 فحص الكل", "ap:testall", key="btn_test_all"))
-        kb.add(btn("🔄 سحب فوري", "ap:fetchall", key="btn_fetch_all"))
-    kb.add(btn("⬅️ رجوع", "admin:home", key="btn_back"))
+        _kadd(kb, btn(" عرض اللوحات", "ap:list", key="btn_list_panels"))
+        _kadd(kb, btn("🔍 فحص الكل", "ap:testall", key="btn_test_all"))
+        _kadd(kb, btn("🔄 سحب فوري", "ap:fetchall", key="btn_fetch_all"))
+    _kadd(kb, btn("⬅️ رجوع", "admin:home", key="btn_back"))
     try:
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception:
