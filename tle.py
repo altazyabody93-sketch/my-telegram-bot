@@ -152,6 +152,8 @@ class BTN:
 # ============================================================
 # قاعدة البيانات
 # ============================================================
+LAYOUT_CACHE = {}
+
 def db():
     conn = sqlite3.connect(DB_FILE, timeout=15)
     conn.row_factory = sqlite3.Row
@@ -8135,16 +8137,6 @@ def cb_admin_layout_edit(call):
     text = "📐 <b>تخطيط القائمة الرئيسية</b>\n\n"
     kb = InlineKeyboardMarkup(row_width=1)
 
-    # ترتيب افتراضي منطقي (صفوف وأعمدة)
-    default_layout = {
-        "btn_platforms": (0, 0),
-        "btn_last_codes": (0, 1),
-        "btn_support": (1, 0),
-        "btn_me": (1, 1),
-        "btn_explore": (2, 0),
-        "btn_settings": (2, 1),
-        "btn_admin": (3, 0),
-    }
     default_names = {
         "btn_platforms": "📱 المنصات",
         "btn_last_codes": "😩 آخر الأكواد",
@@ -8157,27 +8149,31 @@ def cb_admin_layout_edit(call):
 
     try:
         conn = db()
-        rows = conn.execute("SELECT key, label_ar, style, icon FROM button_config WHERE visible=1 ORDER BY sort_order").fetchall()
+        rows = conn.execute("SELECT button_key, row_idx, col_idx, width FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
         conn.close()
+    except Exception:
+        rows = []
 
-        if not rows:
-            text += "☝️ اضغط أي زر لتعديله (من الأزرار الافتراضية)\n\n"
-            for k, (ri, ci) in default_layout.items():
-                if k == "btn_admin" and not user_is_admin(call.from_user.id):
-                    continue
-                label = default_names.get(k, k)
-                text += "• " + label + " — صف " + str(ri + 1) + "، عمود " + str(ci + 1) + "\n"
-                kb.add(btn(label, "grd2:btn:" + k))
-        else:
-            for r in rows:
-                k = r["key"]
-                label = r["label_ar"] or k
-                icon = r["icon"] or ""
-                display = (icon + " " + label) if icon else label
-                kb.add(btn(display, "grd2:btn:" + k))
-            text += "☝️ اضغط أي زر لتعديله"
-    except Exception as e:
-        text += "⚠️ حدث خطأ: " + str(e)[:50]
+    if not rows and not LAYOUT_CACHE:
+        # إذا مفيش داتابيز ولا كاش، نعرض الأزرار الافتراضية
+        text += "☝️ اضغط أي زر لتعديله (من الأزرار الافتراضية)\n\n"
+        for k, label in default_names.items():
+            if k == "btn_admin" and not user_is_admin(call.from_user.id):
+                continue
+            kb.add(btn(label, "grd2:btn:" + k))
+    elif LAYOUT_CACHE:
+        # عرض من الكاش
+        for k, (ri, ci, w) in LAYOUT_CACHE.items():
+            if k == "btn_admin" and not user_is_admin(call.from_user.id):
+                continue
+            label = default_names.get(k, k)
+            kb.add(btn(label + " [ص" + str(ri+1) + ",ع" + str(ci+1) + "]", "grd2:btn:" + k))
+    else:
+        for r in rows:
+            k = r["button_key"]
+            label = default_names.get(k, k)
+            kb.add(btn(label + " [ص" + str(r["row_idx"]+1) + ",ع" + str(r["col_idx"]+1) + "]", "grd2:btn:" + k))
+        text += "☝️ اضغط أي زر لتعديله"
 
     kb.add(btn("🔄 إعادة الافتراضي", "grd2:reset", BTN.DANGER))
     kb.add(btn("⬅️ رجوع", "admin:home", BTN.DANGER))
@@ -8192,21 +8188,30 @@ def cb_admin_layout_edit(call):
         pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:btn:"))
+
+def _update_grid(key, dr=0, dc=0, new_w=None, new_row=False):
+    if key not in LAYOUT_CACHE:
+        LAYOUT_CACHE[key] = (0, 0, 1)
+    ri, ci, w = LAYOUT_CACHE[key]
+    if new_row:
+        ri, ci = max([v[0] for v in LAYOUT_CACHE.values()] + [0]) + 1, 0
+    else:
+        ri = max(0, ri + dr)
+        ci = max(0, ci + dc)
+    if new_w is not None:
+        w = new_w
+    LAYOUT_CACHE[key] = (ri, ci, w)
+    return key
+
 def cb_grid2_btn(call):
     if not user_is_admin(call.from_user.id):
         return
-
     key = call.data.split(":", 2)[2]
 
-    # ترتيب افتراضي
-    default_layout = {
-        "btn_platforms": (0, 0, 2),
-        "btn_last_codes": (0, 1, 1),
-        "btn_support": (1, 0, 1),
-        "btn_me": (1, 1, 1),
-        "btn_explore": (2, 0, 1),
-        "btn_settings": (2, 1, 1),
-        "btn_admin": (3, 0, 1),
+    default_names = {
+        "btn_platforms": "📱 المنصات", "btn_last_codes": "😩 آخر الأكواد", "btn_support": "💭 الدعم",
+        "btn_me": "👤 ملفي", "btn_explore": "🌐 استكشف", "btn_settings": "📊 الترافيك المباشر",
+        "btn_admin": "👮 لوحة الأدمن",
     }
 
     conn = db()
@@ -8218,173 +8223,87 @@ def cb_grid2_btn(call):
         conn.close()
 
     if r:
-        ri = r["row_idx"]
-        ci = r["col_idx"]
-        w = r["width"] if r["width"] else 1
+        ri, ci, w = r["row_idx"], r["col_idx"], (r["width"] or 1)
+    elif key in LAYOUT_CACHE:
+        ri, ci, w = LAYOUT_CACHE[key]
     else:
-        ri, ci, w = default_layout.get(key, (0, 0, 1))
+        ri, ci, w = (list(default_names.keys()).index(key) // 2), (list(default_names.keys()).index(key) % 2), 1
 
-    names = {
-        "btn_platforms": "📱 المنصات",
-        "btn_codes": "💬 الأكواد",
-        "btn_contests": "🎁 المسابقات",
-        "btn_ads": "📢 الإعلانات",
-        "btn_support": "💭 الدعم",
-        "btn_me": "👤 ملفي",
-        "btn_explore": "🌐 استكشف",
-        "btn_settings": "⚙️ الإعدادات",
-        "btn_admin": "👮 لوحة الأدمن",
-    }
-
-    text = "📐 <b>" + names.get(key, key) + "</b>\n\n"
-    text += "📍 الصف: <b>" + str(ri + 1) + "</b>\n"
-    text += "📍 العمود: <b>" + str(ci + 1) + "</b>\n"
-    text += "📏 العرض: <b>" + ("عريض (2)" if w >= 2 else "نص (1)") + "</b>\n\n"
-    text += "اختر الحركة:"
-
+    text = f"📐 <b>{default_names.get(key, key)}</b>\n\n📍 الصف: <b>{ri + 1}</b>\n📍 العمود: <b>{ci + 1}</b>\n📏 العرض: <b>{'عريض (2)' if w >= 2 else 'نص (1)'}</b>\n\nاختر الحركة:"
     kb = InlineKeyboardMarkup(row_width=2)
-
-    kb.add(
-        btn("⬆️ صف فوق", "grd2:up:" + key, key="btn_up"),
-        btn("⬇️ صف تحت", "grd2:down:" + key, key="btn_down")
-    )
-    kb.add(
-        btn("⬅️ عمود يسار", "grd2:left:" + key, key="btn_left"),
-        btn("➡️ عمود يمين", "grd2:right:" + key, key="btn_right")
-    )
-    kb.add(btn("➕ صف جديد أسفل", "grd2:newrow:" + key, key="btn_newrow"))
-
-    if w >= 2:
-        kb.add(btn("📏 جعله نص (1)", "grd2:w1:" + key, key="btn_w1"))
-    else:
-        kb.add(btn("📏 جعله عريض (2)", "grd2:w2:" + key, key="btn_w2"))
-
-    kb.add(btn("⬅️ رجوع", "admin:layout_edit", key="btn_back"))
+    kb.add(btn("⬆️ صف فوق", "grd2:up:" + key), btn("⬇️ صف تحت", "grd2:down:" + key))
+    kb.add(btn("⬅️ عمود يسار", "grd2:left:" + key), btn("➡️ عمود يمين", "grd2:right:" + key))
+    kb.add(btn("➕ صف جديد", "grd2:newrow:" + key))
+    kb.add(btn("📏 عريض" if w < 2 else "📏 نص", "grd2:w2:" + key if w < 2 else "grd2:w1:" + key))
+    kb.add(btn("⬅️ رجوع", "admin:layout_edit", BTN.DANGER))
 
     try:
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception:
         bot.send_message(call.message.chat.id, text, reply_markup=kb)
-    try:
-        bot.answer_callback_query(call.id)
-    except Exception:
-        pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:up:"))
 def cb_grd2_up(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    conn = db()
-    try:
-        r = conn.execute("SELECT row_idx FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
-        if r:
-            ri = max(0, r["row_idx"] - 1)
-            conn.execute("UPDATE main_menu_grid SET row_idx=? WHERE button_key=?", (ri, key))
-            conn.commit()
-    finally:
-        conn.close()
+    _update_grid(key, dr=-1)
     bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:down:"))
 def cb_grd2_down(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    conn = db()
-    try:
-        r = conn.execute("SELECT row_idx FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
-        if r:
-            ri = r["row_idx"] + 1
-            conn.execute("UPDATE main_menu_grid SET row_idx=? WHERE button_key=?", (ri, key))
-            conn.commit()
-    finally:
-        conn.close()
+    _update_grid(key, dr=1)
     bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:left:"))
 def cb_grd2_left(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    conn = db()
-    try:
-        r = conn.execute("SELECT col_idx FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
-        if r:
-            ci = max(0, r["col_idx"] - 1)
-            conn.execute("UPDATE main_menu_grid SET col_idx=? WHERE button_key=?", (ci, key))
-            conn.commit()
-    finally:
-        conn.close()
+    _update_grid(key, dc=-1)
     bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:right:"))
 def cb_grd2_right(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    conn = db()
-    try:
-        r = conn.execute("SELECT col_idx FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
-        if r:
-            ci = r["col_idx"] + 1
-            conn.execute("UPDATE main_menu_grid SET col_idx=? WHERE button_key=?", (ci, key))
-            conn.commit()
-    finally:
-        conn.close()
+    _update_grid(key, dc=1)
     bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
 
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:newrow:"))
 def cb_grd2_newrow(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    conn = db()
-    try:
-        last = conn.execute("SELECT MAX(row_idx) FROM main_menu_grid").fetchone()
-        last_row = (last[0] if last[0] is not None else 0) + 1
-        conn.execute("UPDATE main_menu_grid SET row_idx=?, col_idx=0 WHERE button_key=?", (last_row, key))
-        conn.commit()
-    finally:
-        conn.close()
-    bot.answer_callback_query(call.id, "✅ صف جديد")
+    _update_grid(key, new_row=True)
+    bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:w1:"))
 def cb_grd2_w1(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    _grid2_update(key, width=1)
-    bot.answer_callback_query(call.id, "✅ نص (1)")
+    _update_grid(key, new_w=1)
+    bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:w2:"))
 def cb_grd2_w2(call):
-    if not user_is_admin(call.from_user.id):
-        return
+    if not user_is_admin(call.from_user.id): return
     key = call.data.split(":", 2)[2]
-    _grid2_update(key, width=2)
-    bot.answer_callback_query(call.id, "✅ عريض (2)")
+    _update_grid(key, new_w=2)
+    bot.answer_callback_query(call.id, "✅")
     call.data = "grd2:btn:" + key
     cb_grid2_btn(call)
-
 
 @bot.callback_query_handler(func=lambda c: c.data == "grd2:reset")
 def cb_grd2_reset(call):
