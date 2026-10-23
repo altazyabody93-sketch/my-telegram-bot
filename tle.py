@@ -1,9 +1,10 @@
+import html
 # -*- coding: utf-8 -*-
 # ============================================================
 # المطري OTP — بوت تيليجرام كامل
 # ملف واحد جاهز للتشغيل على Termux
 # ============================================================
-import html
+
 import os
 import sys
 import json
@@ -2189,9 +2190,56 @@ def clear_state(uid):
 # أزرار مشتركة
 # ============================================================
 def main_menu_kb(uid):
-    """بناء القائمة الرئيسية من الداتابيز مباشرة (بدون كاش)."""
+    """بناء القائمة الرئيسية (مع أزرار احتياطية لو الداتابيز فاضية)"""
     
-    # خريطة ربط الأزرار بأوامر الكولباك الصحيحة
+    # قائمة الأزرار الافتراضية
+    default_buttons = [
+        ("btn_platforms", "📱 المنصات", "menu:getnum", "primary"),
+        ("btn_last_codes", "😩 آخر الأكواد", "menu:last_codes", "success"),
+        ("btn_support", "💭 الدعم", "menu:support", "success"),
+        ("btn_me", "👤 ملفي", "menu:me", "primary"),
+        ("btn_explore", "🌐 استكشف", "menu:explore", "primary"),
+        ("btn_settings", "📊 الترافيك المباشر", "menu:traffic", "primary"),
+    ]
+    
+    if user_is_admin(uid):
+        default_buttons.append(("btn_admin", "👮 لوحة الأدمن", "admin:home", "danger"))
+
+    # محاولة قراءة الأزرار من الداتابيز (لو موجودة)
+    rows = []
+    try:
+        conn = db()
+        rows = conn.execute("SELECT button_key, row_idx, col_idx FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    
+    # لو الداتابيز فاضية، استخدم الأزرار الافتراضية
+    if not rows:
+        current_row = []
+        for key, label, cb, style in default_buttons:
+            try:
+                b = InlineKeyboardButton(label, callback_data=cb, style=style)
+            except TypeError:
+                b = InlineKeyboardButton(label, callback_data=cb)
+            
+            if key == "btn_platforms":
+                if current_row:
+                    kb.row(*current_row)
+                    current_row = []
+                kb.row(b) # زر المنصات لوحده
+            else:
+                current_row.append(b)
+                if len(current_row) == 2:
+                    kb.row(*current_row)
+                    current_row = []
+        if current_row:
+            kb.row(*current_row)
+        return kb
+
+    # لو الداتابيز فيها بيانات، ابني الأزرار منها
     callback_map = {
         "btn_platforms": "menu:getnum",
         "btn_last_codes": "menu:last_codes",
@@ -2205,34 +2253,15 @@ def main_menu_kb(uid):
         "btn_admin": "admin:home",
     }
 
-    conn = db()
-    try:
-        rows = conn.execute(
-            "SELECT button_key, row_idx, col_idx FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC"
-        ).fetchall()
-    except Exception:
-        rows = []
-    finally:
-        conn.close()
-
-    if not rows:
-        return InlineKeyboardMarkup()
-
     btns_map = {}
     conn2 = db()
     try:
         for r in rows:
             k = r["button_key"]
-            if k in btns_map:
-                continue
-            row = conn2.execute(
-                "SELECT label_ar, style, icon, visible FROM button_config WHERE key=?", (k,)
-            ).fetchone()
+            if k in btns_map: continue
+            row = conn2.execute("SELECT label_ar, style, icon, visible FROM button_config WHERE key=?", (k,)).fetchone()
             
-            if not row:
-                continue
-            if not row["visible"]:
-                continue
+            if not row or not row["visible"]: continue
             
             label = row["label_ar"] or k
             icon = row["icon"] or ""
@@ -2241,49 +2270,32 @@ def main_menu_kb(uid):
             if icon and not label.startswith(icon):
                 label = icon + " " + label
                 
-            # التحقق من صحة اللون
-            if style and ":" in style:
-                style = style.split(":")[0].strip()
-            if style not in ("primary", "success", "danger"):
-                style = None
+            if style and ":" in style: style = style.split(":")[0].strip()
+            if style not in ("primary", "success", "danger"): style = None
+            if "رجوع" in label or "القائمة الرئيسية" in label: style = "danger"
 
-            if "رجوع" in label or "القائمة الرئيسية" in label:
-                style = "danger"
-
-            # تحديد الأمر الصحيح
             cb_action = callback_map.get(k, k)
-
             try:
-                if style:
-                    b = InlineKeyboardButton(label, callback_data=cb_action, style=style)
-                else:
-                    b = InlineKeyboardButton(label, callback_data=cb_action)
+                if style: b = InlineKeyboardButton(label, callback_data=cb_action, style=style)
+                else: b = InlineKeyboardButton(label, callback_data=cb_action)
             except TypeError:
                 b = InlineKeyboardButton(label, callback_data=cb_action)
-                
             btns_map[k] = b
     finally:
         conn2.close()
 
-    # بناء الأزرار حسب الصفوف (row_idx)
-    kb = InlineKeyboardMarkup()
     current_row = -1
     current_row_btns = []
-    
     for r in rows:
         k = r["button_key"]
-        if k not in btns_map:
-            continue
+        if k not in btns_map: continue
         if r["row_idx"] != current_row:
-            if current_row_btns:
-                kb.row(*current_row_btns)
+            if current_row_btns: kb.row(*current_row_btns)
             current_row_btns = []
             current_row = r["row_idx"]
         current_row_btns.append(btns_map[k])
-        
-    if current_row_btns:
-        kb.row(*current_row_btns)
-        
+    if current_row_btns: kb.row(*current_row_btns)
+    
     return kb
 
 def cb_traffic(call):
