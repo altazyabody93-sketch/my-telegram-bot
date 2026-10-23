@@ -8141,7 +8141,21 @@ def cb_admin_layout_edit(call):
         conn.close()
         
         if not rows:
-            text += "⚠️ لا توجد أزرار لعرضها. تأكد من إضافة أزرار في القائمة الرئيسية أولاً."
+            # لو الداتابيز فاضية، استخدم الأزرار الافتراضية من الكود
+            default_buttons = [
+                ("btn_platforms", "📱 المنصات"),
+                ("btn_last_codes", "😩 آخر الأكواد"),
+                ("btn_support", "💭 الدعم"),
+                ("btn_me", "👤 ملفي"),
+                ("btn_explore", "🌐 استكشف"),
+                ("btn_settings", "📊 الترافيك المباشر"),
+            ]
+            if user_is_admin(call.from_user.id):
+                default_buttons.append(("btn_admin", "👮 لوحة الأدمن"))
+
+            for k, label in default_buttons:
+                kb.add(btn(label, "grd2:btn:" + k))
+            text += "☝️ اضغط أي زر لتعديله (من الأزرار الافتراضية)"
         else:
             for r in rows:
                 k = r["key"]
