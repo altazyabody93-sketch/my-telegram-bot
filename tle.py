@@ -164,18 +164,33 @@ def db():
 # ============================================================
 # دوال الإعدادات
 # ============================================================
+SETTINGS_RAM = {}
+_RAM_PREFIXES = ("country_btn_", "country_emoji_", "platform_btn_", "platform_emoji_")
+
+
 def setting_get(key, default=""):
-    conn = db()
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    conn.close()
+    if key in SETTINGS_RAM:
+        return SETTINGS_RAM[key]
+    try:
+        conn = db()
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        conn.close()
+    except Exception:
+        return default
     return row["value"] if row else default
 
 
 def setting_set(key, value):
-    conn = db()
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    conn.close()
+    if str(key).startswith(_RAM_PREFIXES):
+        SETTINGS_RAM[key] = str(value)
+    try:
+        conn = db()
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        conn.close()
+    except Exception:
+        if not str(key).startswith(_RAM_PREFIXES):
+            raise
 
 
 def is_maintenance():
@@ -1635,6 +1650,43 @@ def log_action(uid, action, details=""):
 _BTN_CACHE = {"data": {}, "loaded_at": 0}
 
 
+BTN_RAM = {}  # تعديلات الأزرار في الذاكرة: key -> {label_ar, icon, style, visible}
+
+BTN_MAIN_DEFAULTS = {
+    "btn_platforms": ("📱", "المنصات", "primary"),
+    "btn_last_codes": ("😩", "آخر الأكواد", "success"),
+    "btn_support": ("💭", "الدعم", "success"),
+    "btn_me": ("👤", "ملفي", "primary"),
+    "btn_explore": ("🌐", "استكشف", "primary"),
+    "btn_settings": ("📊", "الترافيك المباشر", "primary"),
+    "btn_admin": ("👮", "لوحة الأدمن", "danger"),
+}
+
+
+def _btn_ram_set(key, **fields):
+    d = BTN_RAM.setdefault(key, {})
+    for k, v in fields.items():
+        if k in ("label_ar", "icon", "style", "visible"):
+            d[k] = v
+    _BTN_CACHE["loaded_at"] = 0
+    _BTN_CACHE["data"] = {}
+
+
+def _btn_row_merge(key, row=None):
+    """يدمج صف الداتابيز (إن وُجد) مع تعديلات الـ RAM والافتراضي. يرجع dict"""
+    ic, lb, st = BTN_MAIN_DEFAULTS.get(key, ("", "", ""))
+    if row is not None:
+        try:
+            d = {"label_ar": row["label_ar"] or "", "style": row["style"] or "",
+                 "icon": row["icon"] or "", "visible": row["visible"]}
+        except Exception:
+            d = {"label_ar": lb, "style": st, "icon": ic, "visible": 1}
+    else:
+        d = {"label_ar": lb, "style": st, "icon": ic, "visible": 1}
+    d.update(BTN_RAM.get(key, {}))
+    return d
+
+
 def btn_config_load():
     now = time.time()
     if now - _BTN_CACHE["loaded_at"] < 5:
@@ -1653,11 +1705,16 @@ def btn_config_load():
                 "visible": r["visible"],
                 "sort_order": r["sort_order"],
             }
+        for _k, _ov in BTN_RAM.items():
+            _base = d.get(_k, {"label_ar": "", "label_en": "", "style": "", "icon": "", "visible": 1, "sort_order": 0})
+            _base = dict(_base)
+            _base.update(_ov)
+            d[_k] = _base
         _BTN_CACHE["data"] = d
         _BTN_CACHE["loaded_at"] = now
         return d
     except Exception:
-        return {}
+        return {k: dict({"label_ar": "", "label_en": "", "style": "", "icon": "", "visible": 1, "sort_order": 0}, **v) for k, v in BTN_RAM.items()}
 
 
 def btn_config_get(key):
@@ -1675,11 +1732,15 @@ def btn_config_set(key, **fields):
             vals.append(v)
     if not sets:
         return False
+    _btn_ram_set(key, **fields)
     vals.append(key)
-    conn = db()
-    conn.execute("UPDATE button_config SET " + ", ".join(sets) + " WHERE key=?", vals)
-    conn.commit()
-    conn.close()
+    try:
+        conn = db()
+        conn.execute("UPDATE button_config SET " + ", ".join(sets) + " WHERE key=?", vals)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
     # إجبار الكاش على التحديث فوراً
     _BTN_CACHE["loaded_at"] = 0
     _BTN_CACHE["data"] = {}  # تفريغ الكاش بالكامل لإجبار إعادة القراءة
@@ -1711,6 +1772,7 @@ def btn_config_reset():
         ("btn_test", "فحص", "Test", "primary", "🔍", 1, 170),
         ("btn_fetch", "سحب فوري", "Fetch Now", "", "🔄", 1, 180),
     ]
+    BTN_RAM.clear()
     conn = db()
     conn.execute("DELETE FROM button_config")
     for k, ar, en, st, ic, vis, so in defaults:
@@ -2194,6 +2256,8 @@ def clear_state(uid):
 # ============================================================
 # تخطيط القائمة الرئيسية في الذاكرة (RAM) بدون قاعدة بيانات
 # ============================================================
+LAYOUT_EDITED = [False]
+
 LAYOUT_DEFAULT = [
     ("btn_platforms", 0, 0, 2),
     ("btn_last_codes", 1, 0, 1),
@@ -2227,6 +2291,25 @@ def _layout_db_has_rows():
             conn.close()
     except Exception:
         return False
+
+
+def _layout_seed_from_db():
+    """أول تعديل مع وجود بيانات في الداتابيز: ننسخها للكاش (قراءة فقط)"""
+    if LAYOUT_EDITED[0]:
+        return
+    try:
+        conn = db()
+        try:
+            rows = conn.execute("SELECT button_key, row_idx, col_idx, width FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        rows = []
+    if rows:
+        LAYOUT_CACHE.clear()
+        for r in rows:
+            LAYOUT_CACHE[r["button_key"]] = (r["row_idx"], r["col_idx"], (r["width"] or 1))
+    LAYOUT_EDITED[0] = True
 
 
 def _layout_reset_cache():
@@ -2294,10 +2377,20 @@ def main_menu_kb(uid):
     kb = InlineKeyboardMarkup(row_width=2)
     
     # لو الداتابيز فاضية، استخدم التخطيط من الذاكرة (RAM)
-    if not rows:
+    if not rows or LAYOUT_EDITED[0]:
         def _mk(key):
             cb, style = LAYOUT_ACTIONS.get(key, (key, None))
             label = LAYOUT_NAMES.get(key, key)
+            _ov = BTN_RAM.get(key)
+            if _ov:
+                _d = _btn_row_merge(key)
+                if not _d.get("visible", 1):
+                    return None
+                label = ((_d["icon"] + " ") if _d["icon"] else "") + (_d["label_ar"] or key)
+                _st = (_d.get("style") or "").split(":")[0].strip()
+                style = _st if _st in ("primary", "success", "danger") else None
+                if "رجوع" in label or "القائمة الرئيسية" in label:
+                    style = "danger"
             try:
                 return InlineKeyboardButton(label, callback_data=cb, style=style)
             except TypeError:
@@ -2305,13 +2398,16 @@ def main_menu_kb(uid):
         for row in _layout_rows(user_is_admin(uid)):
             cur = []
             for key, w in row:
+                _b = _mk(key)
+                if _b is None:
+                    continue
                 if w >= 2:
                     if cur:
                         kb.row(*cur)
                         cur = []
-                    kb.row(_mk(key))
+                    kb.row(_b)
                 else:
-                    cur.append(_mk(key))
+                    cur.append(_b)
             if cur:
                 kb.row(*cur)
         return kb
@@ -2337,6 +2433,8 @@ def main_menu_kb(uid):
             k = r["button_key"]
             if k in btns_map: continue
             row = conn2.execute("SELECT label_ar, style, icon, visible FROM button_config WHERE key=?", (k,)).fetchone()
+            if k in BTN_RAM:
+                row = _btn_row_merge(k, row)
             
             if not row or not row["visible"]: continue
             
@@ -3068,20 +3166,15 @@ def admin_panel(chat_id, uid, edit=None):
 def cb_admin_custom_main_menu(call):
     if not user_is_admin(call.from_user.id): return
     
-    # الأزرار الافتراضية للقائمة الرئيسية
-    main_keys = [
-        ("btn_platforms", "📱 المنصات"),
-        ("btn_last_codes", "😩 آخر الأكواد"),
-        ("btn_support", "💭 الدعم"),
-        ("btn_me", "👤 ملفي"),
-        ("btn_explore", "🌐 استكشف"),
-        ("btn_settings", "📊 الترافيك المباشر"),
-        ("btn_admin", "👮 لوحة الأدمن"),
-    ]
+    main_keys = ["btn_platforms", "btn_last_codes", "btn_settings", "btn_me", "btn_explore", "btn_support", "btn_admin"]
     
+    try:
+        conn = db()
+    except Exception:
+        conn = None
     text = "🎨 <b>تخصيص القائمة الرئيسية</b>\n\n"
     text += "هذه هي الأزرار اللي بتظهر للمستخدم في القائمة الرئيسية.\n"
-    text += "اضغط على أي زرار لتعديله (يُحفظ في الذاكرة بدون داتابيز):"
+    text += "اضغط على أي زرار لتعديله:"
     
     kb = InlineKeyboardMarkup(row_width=1)
     
@@ -3093,16 +3186,17 @@ def cb_admin_custom_main_menu(call):
         "": "⚪ افتراضي"
     }
     
-    for key, default_label in main_keys:
-        if key == "btn_admin" and not user_is_admin(call.from_user.id):
-            continue
-            
-        # نقرأ من الكاش أولاً، ثم من الداتابيز لو موجودة
-        cfg = btn_config_get(key)
-        
-        label = cfg.get("label_ar") or default_label
-        icon = cfg.get("icon") or ""
-        style = cfg.get("style") or ""
+    for key in main_keys:
+        _row = None
+        try:
+            if conn is not None:
+                _row = conn.execute("SELECT key, label_ar, style, icon FROM button_config WHERE key=?", (key,)).fetchone()
+        except Exception:
+            _row = None
+        row = _btn_row_merge(key, _row)
+        label = row["label_ar"] or key
+        icon = row["icon"] or ""
+        style = row["style"] or ""
         
         if ":" in style:
             style = style.split(":")[0]
@@ -3111,6 +3205,11 @@ def cb_admin_custom_main_menu(call):
         display = f"{icon} {label} | {color_ar}"
         kb.add(btn(display, "bc:v:" + key))
     
+    try:
+        if conn is not None:
+            conn.close()
+    except Exception:
+        pass
     kb.add(btn("⬅️ رجوع", "admin:home"))
     
     try:
@@ -3122,17 +3221,19 @@ def cb_admin_custom_main_menu(call):
     except Exception:
         pass
 
+# ============================================================
+# 📱 تخصيص أزرار المنصات (داخل قسم المنصات)
+# ============================================================
 @bot.callback_query_handler(func=lambda c: c.data == "admin:custom_platforms")
 def cb_admin_custom_platforms(call):
     if not user_is_admin(call.from_user.id): return
 
-    platforms = numbers_platforms()
+    try:
+        platforms = numbers_platforms()
+    except Exception:
+        platforms = []
     if not platforms:
-        try:
-            bot.answer_callback_query(call.id, "لا توجد منصات مضافة بعد.", show_alert=True)
-        except Exception:
-            pass
-        return
+        platforms = [p[0] for p in PLATFORMS]
 
     text = "📱 <b>تخصيص أزرار المنصات</b>\n\n"
     text += "هذه هي الأزرار التي تظهر داخل قسم المنصات.\n"
@@ -3621,10 +3722,12 @@ def cb_admin_custom_pl_co(call):
 def cb_admin_edit_platforms(call):
     if not user_is_admin(call.from_user.id): return
 
-    platforms = numbers_platforms()
+    try:
+        platforms = numbers_platforms()
+    except Exception:
+        platforms = []
     if not platforms:
-        bot.answer_callback_query(call.id, "لا توجد منصات مضافة.", show_alert=True)
-        return
+        platforms = [p[0] for p in PLATFORMS]
 
     text = "🗂 <b>أزرار المنصات</b>\n\n"
     text += "اضغط على المنصة لتعديل (الاسم / الإيموجي / اللون):"
@@ -3798,8 +3901,10 @@ def cb_admin_edit_countries(call):
         countries = []
 
     if not countries:
-        bot.answer_callback_query(call.id, "لا توجد دول مضافة.", show_alert=True)
-        return
+        countries = []
+        for _code, _v in COUNTRIES.items():
+            if _v[1] not in countries:
+                countries.append(_v[1])
 
     text = "🌍 <b>أزرار الدول</b>\n\n"
     text += "اضغط على الدولة لتعديل (الاسم / الإيموجي / اللون):"
@@ -5522,16 +5627,11 @@ def cb_bc_view(call):
         conn = db()
         row = conn.execute("SELECT label_ar, style, icon, visible FROM button_config WHERE key=?", (key,)).fetchone()
         conn.close()
-        if row:
-            label_ar = row["label_ar"] or ""
-            style = row["style"] or ""
-            icon = row["icon"] or ""
-            visible = row["visible"]
-        else:
-            label_ar = ""
-            style = ""
-            icon = ""
-            visible = 1
+        _m = _btn_row_merge(key, row)
+        label_ar = _m["label_ar"] or ""
+        style = _m["style"] or ""
+        icon = _m["icon"] or ""
+        visible = _m["visible"]
     except Exception as e:
         print("[BC_VIEW_ERR]", e)
         label_ar = ""
@@ -5607,6 +5707,7 @@ def cb_bc_set_color(call):
     key = parts[2]
     style = parts[3] if len(parts) > 3 else ""
     # ✅ إصلاح: تمرير style فعلياً + الحفظ المباشر في الداتابيز
+    _btn_ram_set(key, style=style)
     try:
         conn = db()
         conn.execute("UPDATE button_config SET style=? WHERE key=?", (style, key))
@@ -8222,7 +8323,7 @@ def cb_admin_layout_edit(call):
     default_names = LAYOUT_NAMES
 
     rows = []
-    if _layout_db_has_rows():
+    if _layout_db_has_rows() and not LAYOUT_EDITED[0]:
         try:
             conn = db()
             rows = conn.execute("SELECT button_key, row_idx, col_idx, width FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
@@ -8260,6 +8361,8 @@ def cb_admin_layout_edit(call):
 
 
 def _update_grid(key, dr=0, dc=0, new_w=None, new_row=False):
+    _layout_seed_from_db()
+    LAYOUT_EDITED[0] = True
     _layout_ensure()
     if key not in LAYOUT_CACHE:
         return key
@@ -8291,7 +8394,7 @@ def cb_grid2_btn(call):
     default_names = LAYOUT_NAMES
 
     r = None
-    if _layout_db_has_rows():
+    if _layout_db_has_rows() and not LAYOUT_EDITED[0]:
         conn = db()
         try:
             r = conn.execute("SELECT row_idx, col_idx, width FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
@@ -8396,6 +8499,7 @@ def cb_grd2_w2(call):
 def cb_grd2_reset(call):
     if not user_is_admin(call.from_user.id):
         return
+    LAYOUT_EDITED[0] = False
     if _layout_db_has_rows():
         conn = db()
         conn.execute("DELETE FROM main_menu_grid")
