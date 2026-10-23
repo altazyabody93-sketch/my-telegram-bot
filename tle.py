@@ -2191,6 +2191,81 @@ def clear_state(uid):
 # ============================================================
 # أزرار مشتركة
 # ============================================================
+# ============================================================
+# تخطيط القائمة الرئيسية في الذاكرة (RAM) بدون قاعدة بيانات
+# ============================================================
+LAYOUT_DEFAULT = [
+    ("btn_platforms", 0, 0, 2),
+    ("btn_last_codes", 1, 0, 1),
+    ("btn_support", 1, 1, 1),
+    ("btn_me", 2, 0, 1),
+    ("btn_explore", 2, 1, 1),
+    ("btn_settings", 3, 0, 1),
+    ("btn_admin", 3, 1, 1),
+]
+
+LAYOUT_NAMES = {
+    "btn_platforms": "📱 المنصات", "btn_last_codes": "😩 آخر الأكواد", "btn_support": "💭 الدعم",
+    "btn_me": "👤 ملفي", "btn_explore": "🌐 استكشف", "btn_settings": "📊 الترافيك المباشر",
+    "btn_admin": "👮 لوحة الأدمن",
+}
+LAYOUT_ACTIONS = {
+    "btn_platforms": ("menu:getnum", "primary"), "btn_last_codes": ("menu:last_codes", "success"),
+    "btn_support": ("menu:support", "success"), "btn_me": ("menu:me", "primary"),
+    "btn_explore": ("menu:explore", "primary"), "btn_settings": ("menu:traffic", "primary"),
+    "btn_admin": ("admin:home", "danger"),
+}
+
+
+def _layout_db_has_rows():
+    try:
+        conn = db()
+        try:
+            r = conn.execute("SELECT COUNT(*) FROM main_menu_grid").fetchone()
+            return bool(r and r[0] > 0)
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _layout_reset_cache():
+    LAYOUT_CACHE.clear()
+    for k, r, c, w in LAYOUT_DEFAULT:
+        LAYOUT_CACHE[k] = (r, c, w)
+
+
+def _layout_ensure():
+    if not LAYOUT_CACHE:
+        _layout_reset_cache()
+
+
+def _layout_normalize():
+    items = sorted(LAYOUT_CACHE.items(), key=lambda kv: (kv[1][0], kv[1][1]))
+    new = {}
+    last_r, ri, ci = None, -1, 0
+    for k, (r, c, w) in items:
+        if r != last_r:
+            ri += 1
+            ci = 0
+            last_r = r
+        new[k] = (ri, ci, w)
+        ci += 1
+    LAYOUT_CACHE.clear()
+    LAYOUT_CACHE.update(new)
+
+
+def _layout_rows(include_admin):
+    """يرجع قائمة صفوف، كل صف قائمة (key, w) من الكاش"""
+    _layout_ensure()
+    rows = {}
+    for k, (r, c, w) in LAYOUT_CACHE.items():
+        if k == "btn_admin" and not include_admin:
+            continue
+        rows.setdefault(r, []).append((c, k, w))
+    return [[(k, w) for c, k, w in sorted(rows[r])] for r in sorted(rows)]
+
+
 def main_menu_kb(uid):
     """بناء القائمة الرئيسية (مع أزرار احتياطية لو الداتابيز فاضية)"""
     
@@ -2218,27 +2293,27 @@ def main_menu_kb(uid):
 
     kb = InlineKeyboardMarkup(row_width=2)
     
-    # لو الداتابيز فاضية، استخدم الأزرار الافتراضية
+    # لو الداتابيز فاضية، استخدم التخطيط من الذاكرة (RAM)
     if not rows:
-        current_row = []
-        for key, label, cb, style in default_buttons:
+        def _mk(key):
+            cb, style = LAYOUT_ACTIONS.get(key, (key, None))
+            label = LAYOUT_NAMES.get(key, key)
             try:
-                b = InlineKeyboardButton(label, callback_data=cb, style=style)
+                return InlineKeyboardButton(label, callback_data=cb, style=style)
             except TypeError:
-                b = InlineKeyboardButton(label, callback_data=cb)
-            
-            if key == "btn_platforms":
-                if current_row:
-                    kb.row(*current_row)
-                    current_row = []
-                kb.row(b) # زر المنصات لوحده
-            else:
-                current_row.append(b)
-                if len(current_row) == 2:
-                    kb.row(*current_row)
-                    current_row = []
-        if current_row:
-            kb.row(*current_row)
+                return InlineKeyboardButton(label, callback_data=cb)
+        for row in _layout_rows(user_is_admin(uid)):
+            cur = []
+            for key, w in row:
+                if w >= 2:
+                    if cur:
+                        kb.row(*cur)
+                        cur = []
+                    kb.row(_mk(key))
+                else:
+                    cur.append(_mk(key))
+            if cur:
+                kb.row(*cur)
         return kb
 
     # لو الداتابيز فيها بيانات، ابني الأزرار منها
@@ -8135,44 +8210,33 @@ def cb_admin_layout_edit(call):
         return
 
     text = "📐 <b>تخطيط القائمة الرئيسية</b>\n\n"
-    kb = InlineKeyboardMarkup(row_width=1)
+    kb = InlineKeyboardMarkup(row_width=2)
 
-    default_names = {
-        "btn_platforms": "📱 المنصات",
-        "btn_last_codes": "😩 آخر الأكواد",
-        "btn_support": "💭 الدعم",
-        "btn_me": "👤 ملفي",
-        "btn_explore": "🌐 استكشف",
-        "btn_settings": "📊 الترافيك المباشر",
-        "btn_admin": "👮 لوحة الأدمن",
-    }
+    default_names = LAYOUT_NAMES
 
-    try:
-        conn = db()
-        rows = conn.execute("SELECT button_key, row_idx, col_idx, width FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
-        conn.close()
-    except Exception:
-        rows = []
+    rows = []
+    if _layout_db_has_rows():
+        try:
+            conn = db()
+            rows = conn.execute("SELECT button_key, row_idx, col_idx, width FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
+            conn.close()
+        except Exception:
+            rows = []
 
-    if not rows and not LAYOUT_CACHE:
-        # إذا مفيش داتابيز ولا كاش، نعرض الأزرار الافتراضية
-        text += "☝️ اضغط أي زر لتعديله (من الأزرار الافتراضية)\n\n"
-        for k, label in default_names.items():
-            if k == "btn_admin" and not user_is_admin(call.from_user.id):
-                continue
-            kb.add(btn(label, "grd2:btn:" + k))
-    elif LAYOUT_CACHE:
-        # عرض من الكاش
-        for k, (ri, ci, w) in LAYOUT_CACHE.items():
-            if k == "btn_admin" and not user_is_admin(call.from_user.id):
-                continue
-            label = default_names.get(k, k)
-            kb.add(btn(label + " [ص" + str(ri+1) + ",ع" + str(ci+1) + "]", "grd2:btn:" + k))
+    if not rows:
+        _layout_ensure()
+        text += "☝️ اضغط أي زر لتعديله"
+        for row in _layout_rows(True):
+            bs = []
+            for k, w in row:
+                ri, ci, _w = LAYOUT_CACHE[k]
+                bs.append(btn(default_names.get(k, k) + " [ص" + str(ri + 1) + ",ع" + str(ci + 1) + "]", "grd2:btn:" + k))
+            kb.row(*bs)
     else:
         for r in rows:
             k = r["button_key"]
             label = default_names.get(k, k)
-            kb.add(btn(label + " [ص" + str(r["row_idx"]+1) + ",ع" + str(r["col_idx"]+1) + "]", "grd2:btn:" + k))
+            kb.add(btn(label + " [ص" + str(r["row_idx"] + 1) + ",ع" + str(r["col_idx"] + 1) + "]", "grd2:btn:" + k))
         text += "☝️ اضغط أي زر لتعديله"
 
     kb.add(btn("🔄 إعادة الافتراضي", "grd2:reset", BTN.DANGER))
@@ -8187,60 +8251,76 @@ def cb_admin_layout_edit(call):
     except Exception:
         pass
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:btn:"))
 
 def _update_grid(key, dr=0, dc=0, new_w=None, new_row=False):
+    _layout_ensure()
     if key not in LAYOUT_CACHE:
-        LAYOUT_CACHE[key] = (0, 0, 1)
+        return key
     ri, ci, w = LAYOUT_CACHE[key]
     if new_row:
-        ri, ci = max([v[0] for v in LAYOUT_CACHE.values()] + [0]) + 1, 0
+        ri, ci = max(v[0] for v in LAYOUT_CACHE.values()) + 1, 0
     else:
-        ri = max(0, ri + dr)
-        ci = max(0, ci + dc)
+        if dr:
+            nr = ri + dr
+            if nr < 0:
+                nr = ri  # أول صف: لا يتحرك أكثر
+            else:
+                ri, ci = nr, 10 ** 6
+        if dc:
+            ci = ci + (1.5 if dc > 0 else -1.5)
     if new_w is not None:
         w = new_w
     LAYOUT_CACHE[key] = (ri, ci, w)
+    _layout_normalize()
     return key
 
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:btn:"))
 def cb_grid2_btn(call):
     if not user_is_admin(call.from_user.id):
         return
     key = call.data.split(":", 2)[2]
 
-    default_names = {
-        "btn_platforms": "📱 المنصات", "btn_last_codes": "😩 آخر الأكواد", "btn_support": "💭 الدعم",
-        "btn_me": "👤 ملفي", "btn_explore": "🌐 استكشف", "btn_settings": "📊 الترافيك المباشر",
-        "btn_admin": "👮 لوحة الأدمن",
-    }
+    default_names = LAYOUT_NAMES
 
-    conn = db()
-    try:
-        r = conn.execute("SELECT row_idx, col_idx, width FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
-    except Exception:
-        r = None
-    finally:
-        conn.close()
+    r = None
+    if _layout_db_has_rows():
+        conn = db()
+        try:
+            r = conn.execute("SELECT row_idx, col_idx, width FROM main_menu_grid WHERE button_key=?", (key,)).fetchone()
+        except Exception:
+            r = None
+        finally:
+            conn.close()
 
     if r:
         ri, ci, w = r["row_idx"], r["col_idx"], (r["width"] or 1)
-    elif key in LAYOUT_CACHE:
-        ri, ci, w = LAYOUT_CACHE[key]
     else:
-        ri, ci, w = (list(default_names.keys()).index(key) // 2), (list(default_names.keys()).index(key) % 2), 1
+        _layout_ensure()
+        if key not in LAYOUT_CACHE:
+            try:
+                bot.answer_callback_query(call.id, "❌ غير موجود", show_alert=True)
+            except Exception:
+                pass
+            return
+        ri, ci, w = LAYOUT_CACHE[key]
 
     text = f"📐 <b>{default_names.get(key, key)}</b>\n\n📍 الصف: <b>{ri + 1}</b>\n📍 العمود: <b>{ci + 1}</b>\n📏 العرض: <b>{'عريض (2)' if w >= 2 else 'نص (1)'}</b>\n\nاختر الحركة:"
     kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(btn("⬆️ صف فوق", "grd2:up:" + key), btn("⬇️ صف تحت", "grd2:down:" + key))
-    kb.add(btn("⬅️ عمود يسار", "grd2:left:" + key), btn("➡️ عمود يمين", "grd2:right:" + key))
+    kb.add(btn("⬆️ فوق", "grd2:up:" + key), btn("⬇️ تحت", "grd2:down:" + key))
+    kb.add(btn("⬅️ يسار", "grd2:left:" + key), btn("➡️ يمين", "grd2:right:" + key))
     kb.add(btn("➕ صف جديد", "grd2:newrow:" + key))
-    kb.add(btn("📏 عريض" if w < 2 else "📏 نص", "grd2:w2:" + key if w < 2 else "grd2:w1:" + key))
+    kb.add(btn("📏 جعله عريض" if w < 2 else "📏 جعله نص", "grd2:w2:" + key if w < 2 else "grd2:w1:" + key))
     kb.add(btn("⬅️ رجوع", "admin:layout_edit", BTN.DANGER))
 
     try:
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=kb)
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:up:"))
 def cb_grd2_up(call):
@@ -8309,20 +8389,23 @@ def cb_grd2_w2(call):
 def cb_grd2_reset(call):
     if not user_is_admin(call.from_user.id):
         return
-    conn = db()
-    conn.execute("DELETE FROM main_menu_grid")
-    defaults = [
-        ("btn_platforms", 0, 0, 2),
-        ("btn_support", 1, 0, 1),
-        ("btn_me", 1, 1, 1),
-        ("btn_explore", 2, 0, 1),
-        ("btn_settings", 2, 1, 1),
-        ("btn_admin", 3, 0, 1),
-    ]
-    for k, r, cl, w in defaults:
-        conn.execute("INSERT INTO main_menu_grid (button_key, row_idx, col_idx, width) VALUES (?, ?, ?, ?)", (k, r, cl, w))
-    conn.commit()
-    conn.close()
+    if _layout_db_has_rows():
+        conn = db()
+        conn.execute("DELETE FROM main_menu_grid")
+        defaults = [
+            ("btn_platforms", 0, 0, 2),
+            ("btn_support", 1, 0, 1),
+            ("btn_me", 1, 1, 1),
+            ("btn_explore", 2, 0, 1),
+            ("btn_settings", 2, 1, 1),
+            ("btn_admin", 3, 0, 1),
+        ]
+        for k, r, cl, w in defaults:
+            conn.execute("INSERT INTO main_menu_grid (button_key, row_idx, col_idx, width) VALUES (?, ?, ?, ?)", (k, r, cl, w))
+        conn.commit()
+        conn.close()
+    else:
+        _layout_reset_cache()
     bot.answer_callback_query(call.id, "✅ تم", show_alert=True)
     call.data = "admin:layout_edit"
     cb_admin_layout_edit(call)
