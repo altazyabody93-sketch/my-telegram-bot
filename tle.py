@@ -8132,61 +8132,38 @@ def cb_admin_layout_edit(call):
     if not user_is_admin(call.from_user.id):
         return
 
-    conn = db()
-    try:
-        rows = conn.execute(
-            "SELECT button_key, row_idx, col_idx, width FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC"
-        ).fetchall()
-    except Exception:
-        rows = []
-    finally:
-        conn.close()
-
-    names = {
-        "btn_platforms": "📱 المنصات",
-        "btn_codes": "💬 الأكواد",
-        "btn_contests": "🎁 المسابقات",
-        "btn_ads": "📢 الإعلانات",
-        "btn_support": "💭 الدعم",
-        "btn_me": "👤 ملفي",
-        "btn_explore": "🌐 استكشف",
-        "btn_settings": "⚙️ الإعدادات",
-        "btn_admin": "👮 لوحة الأدمن",
-    }
-
     text = "📐 <b>تخطيط القائمة الرئيسية</b>\n\n"
-
-    for r in rows:
-        k = r["button_key"]
-        ri = r["row_idx"] + 1
-        ci = r["col_idx"] + 1
-        w = r["width"] if r["width"] else 1
-        w_text = "عريض (2)" if w >= 2 else "نص (1)"
-        text += "• " + names.get(k, k) + " — صف " + str(ri) + "، عمود " + str(ci) + "، " + w_text + "\n"
-
-    text += "\n☝️ اضغط أي زر لتعديله"
-
     kb = InlineKeyboardMarkup(row_width=1)
-    for r in rows:
-        k = r["button_key"]
-        ri = r["row_idx"] + 1
-        ci = r["col_idx"] + 1
-        w = r["width"] if r["width"] else 1
-        label = names.get(k, k) + " [ص" + str(ri) + ",ع" + str(ci) + "," + ("ع" if w>=2 else "ن") + "]"
-        kb.add(btn(label, "grd2:btn:" + k, key="btn_grid_item"))
+    
+    try:
+        conn = db()
+        rows = conn.execute("SELECT key, label_ar, style, icon FROM button_config WHERE visible=1 ORDER BY sort_order").fetchall()
+        conn.close()
+        
+        if not rows:
+            text += "⚠️ لا توجد أزرار لعرضها. تأكد من إضافة أزرار في القائمة الرئيسية أولاً."
+        else:
+            for r in rows:
+                k = r["key"]
+                label = r["label_ar"] or k
+                icon = r["icon"] or ""
+                display = (icon + " " + label) if icon else label
+                kb.add(btn(display, "grd2:btn:" + k))
+            text += "☝️ اضغط أي زر لتعديله"
+    except Exception as e:
+        text += "⚠️ حدث خطأ: " + str(e)[:50]
 
-    kb.add(btn("🔄 إعادة الافتراضي", "grd2:reset", key="btn_reset"))
-    kb.add(btn("⬅️ رجوع", "admin:home", key="btn_back"))
+    kb.add(btn("🔄 إعادة الافتراضي", "grd2:reset", BTN.DANGER))
+    kb.add(btn("⬅️ رجوع", "admin:home", BTN.DANGER))
 
     try:
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=kb)
+        bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("grd2:btn:"))
 def cb_grid2_btn(call):
@@ -10620,6 +10597,28 @@ def _run_web_server():
         print("[WEB] ⚠️ خطأ: " + str(e))
 
 # تشغيل السيرفر في Thread منفصل (ما يعطلش البوت)
+threading.Thread(target=_run_web_server, daemon=True).start()
+
+
+
+# ============================================================
+# 🌐 سيرفر Flask (لـ Render Web Service و UptimeRobot)
+# ============================================================
+from flask import Flask
+
+web_app = Flask(__name__)
+
+@web_app.route('/')
+@web_app.route('/health')
+def health_check():
+    return "Matari OTP Bot is running!", 200
+
+def _run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    print(f"[WEB] ✅ Flask server running on port {port}")
+    web_app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+# تشغيل السيرفر في الخلفية (Thread منفصل عشان ما يعطلش البوت)
 threading.Thread(target=_run_web_server, daemon=True).start()
 
 
