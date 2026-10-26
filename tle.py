@@ -117,7 +117,7 @@ OTP_STYLES = {
 # ============================================================
 # الإعدادات
 # ============================================================
-BOT_TOKEN = "7798949296:AAF_S41VvNkPyQNypCva77nDktT38Y9QPfI"
+BOT_TOKEN = "7798949296:AAHCu5ZyZDZ6tizl4H9E2oofqQff3eeL4KA"
 MAIN_ADMIN_ID = 7325566792
 DB_FILE = "data/bot.db"
 DEFAULT_INTERVAL = 60
