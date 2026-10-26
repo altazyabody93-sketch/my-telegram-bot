@@ -117,9 +117,10 @@ OTP_STYLES = {
 # ============================================================
 # الإعدادات
 # ============================================================
-BOT_TOKEN = "7798949296:AAHCu5ZyZDZ6tizl4H9E2oofqQff3eeL4KA"
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7331163937:AAGjmF6F7lfkbqX36D44suAhi5fiQVeVILg"
 MAIN_ADMIN_ID = 7325566792
 DB_FILE = "data/bot.db"
+PANELS_FILE = "data/panels.json"
 DEFAULT_INTERVAL = 60
 MAX_CODES = 2000
 
@@ -155,8 +156,9 @@ class BTN:
 LAYOUT_CACHE = {}
 
 def db():
-    conn = sqlite3.connect(DB_FILE, timeout=15)
+    conn = sqlite3.connect(DB_FILE, timeout=60)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
 
@@ -887,6 +889,20 @@ def panel_get(pid):
     return dict(row) if row else None
 
 
+
+def load_panels_from_file():
+    """يحمّل اللوحات من الملف المحفوظ عند بدء التشغيل."""
+    try:
+        if os.path.exists(PANELS_FILE):
+            with open(PANELS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    PANELS_CACHE.clear()
+                    PANELS_CACHE.extend(data)
+            print(f"[PANEL] ✅ Loaded {len(PANELS_CACHE)} panels from file")
+    except Exception as e:
+        print("[PANEL] ⚠️ Failed to load panels:", e)
+
 def panel_add(name, url, token="", username="", password="", auth_type="token",
               api_path="", api_method="GET", json_path="",
               field_phone="", field_code="", field_platform="", field_country="", field_message="",
@@ -1434,6 +1450,14 @@ def process_panel_codes(panel, codes):
         except Exception as e:
             print("[PROCESS] item err:", e)
 
+    # === 📩 تسليم الأكواد لمن اختار الأرقام (مستقل عن القناة) ===
+    if to_send and not first_run:
+        for _fl, _ph, _mt, _cd, _pl, _cn in reversed(to_send):
+            try:
+                deliver_code(_ph, _cd, _mt, _pl, _cn, _fl, panel.get("name"))
+            except Exception as _e:
+                print("[DELIVER] err:", _e)
+
     if forward_id and to_send:
         support_link = setting_get("channel_link", "https://t.me/")
         bot_link = "https://t.me/" + get_bot_username()
@@ -1447,90 +1471,6 @@ def process_panel_codes(panel, codes):
                                  admin_link, panel_name=panel.get("name") or "MATRUI_OTP",
                                  platform=platform, country_name=cname)
                 
-                # === إرسال إشعار للمستخدمين الذين يفتحون الأرقام ===
-                now_ts = time.time()
-                for user_id, watching in list(WATCHING_USERS.items()):
-                    # التحقق الدقيق: الرقم موجود + المنصة مطابقة + الدولة مطابقة
-                    if (not first_run and "current_numbers" in watching and
-                            _watch_phone_match(phone_disp, watching["current_numbers"])):
-                        if (now_ts - watching.get("last_time", 0)) < 1800:
-                            try:
-                                # تصميم الإشعار المختصر النهائي
-                                flag_icon, _, _cc = detect_country(phone_disp)
-                                iso_code = COUNTRIES.get(_cc, ("", ""))[0] or "XX"
-                                
-                                # --- تصميم الإشعار الداخلي الفخم (مطابق للقناة) ---
-                                flag_icon, _, _cc = detect_country(phone_disp)
-                                iso_code = COUNTRIES.get(_cc, ("", ""))[0] or "XX"
-                                
-                                _pcodes = {"WhatsApp":"WH","Telegram":"TG","Facebook":"FB","Instagram":"IG",
-                                           "Twitter":"TW","Google":"GG","Apple":"AP","TikTok":"TT",
-                                           "Discord":"DC","Snapchat":"SC"}
-                                short_pname = _pcodes.get(str(platform).strip(), str(platform)[:2].upper())
-                                
-                                # --- تصميم الإشعار الداخلي الفخم (مصحح) ---
-                                flag_icon, _, _cc = detect_country(phone_disp)
-                                iso_code = COUNTRIES.get(_cc, ("", ""))[0] or "XX"
-                                
-                                _pcodes = {"WhatsApp":"WH","Telegram":"TG","Facebook":"FB","Instagram":"IG",
-                                           "Twitter":"TW","Google":"GG","Apple":"AP","TikTok":"TT",
-                                           "Discord":"DC","Snapchat":"SC"}
-                                short_pname = _pcodes.get(str(platform).strip(), str(platform)[:2].upper())
-                                
-                                # --- تصميم الإشعار الداخلي الفخم (مطابق للقناة) ---
-                                flag_icon, _, _cc = detect_country(phone_disp)
-                                iso_code = COUNTRIES.get(_cc, ("", ""))[0] or "XX"
-                                
-                                _pcodes = {"WhatsApp":"WH","Telegram":"TG","Facebook":"FB","Instagram":"IG",
-                                           "Twitter":"TW","Google":"GG","Apple":"AP","TikTok":"TT",
-                                           "Discord":"DC","Snapchat":"SC"}
-                                short_pname = _pcodes.get(str(platform).strip(), str(platform)[:2].upper())
-                                
-                                # --- تصميم الإشعار الداخلي الفخم (مطابق للقناة) ---
-                                flag_icon, _, _cc = detect_country(phone_disp)
-                                iso_code = COUNTRIES.get(_cc, ("", ""))[0] or "XX"
-                                
-                                _pcodes = {"WhatsApp":"WH","Telegram":"TG","Facebook":"FB","Instagram":"IG",
-                                           "Twitter":"TW","Google":"GG","Apple":"AP","TikTok":"TT",
-                                           "Discord":"DC","Snapchat":"SC"}
-                                short_pname = _pcodes.get(str(platform).strip(), str(platform)[:2].upper())
-                                
-                                # --- بناء الإشعار الداخلي بنفس دالة القناة ---
-                                safe_sms_inner = html.escape(msg_text) if msg_text else ""
-                                notify_text = otp_render("quote", flag, phone_disp, "ar", safe_sms_inner, code, msg_text, 
-                                                         panel_name=panel.get("name") or "MATRUI_OTP", 
-                                                         platform=platform, country_name=cname)
-                                
-                                kb = InlineKeyboardMarkup()
-                                # زر الكود الأخضر (قابل للنسخ)
-                                btn_code = _kb_btn(str(code), copy_text=str(code))
-                                if btn_code:
-                                    kb.row(btn_code)
-                                
-                                # أزرار الجروب
-                                group_link = setting_get("channel_link", "")
-                                if _valid_url(group_link):
-                                    btn_group = _kb_btn("🔑 جروب البوت", url=group_link)
-                                    if btn_group:
-                                        kb.row(btn_group)
-                                
-                                bot.send_message(user_id, notify_text, reply_markup=kb)
-                                _log_delivery(user_id, phone_disp, code, platform)
-                                
-                                # تحديث عدد الأكواد للمستخدم
-                                try:
-                                    conn = db()
-                                    conn.execute("INSERT OR IGNORE INTO user_stats (telegram_id, total_codes) VALUES (?, 0)", (user_id,))
-                                    conn.execute("UPDATE user_stats SET total_codes = total_codes + 1 WHERE telegram_id=?", (user_id,))
-                                    conn.commit()
-                                    conn.close()
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                            break # نرسل مرة واحدة فقط
-
-                # ==================================================
                 time.sleep(0.6)
             except Exception as e:
                 print("[PROCESS] send err:", e)
@@ -1651,7 +1591,7 @@ def ag_apply(p, ok, codes, err, ms, now):
     name = html.escape(str(p.get("name") or "?"))
     h = ag_get(pid)
     try:
-        iv = max(3, int(float(p.get("interval_sec") or 60)))
+        iv = max(10, int(float(p.get("interval_sec") or 60)))
     except (ValueError, TypeError):
         iv = 60
     if ok:
@@ -1691,7 +1631,7 @@ def ag_cycle():
     for p in panels_list(only_enabled=True):
         h = ag_get(p["id"])
         try:
-            iv = max(3, int(float(p.get("interval_sec") or 60)))
+            iv = max(10, int(float(p.get("interval_sec") or 60)))
         except (ValueError, TypeError):
             iv = 60
         if now < h["next_retry"]:
@@ -1759,7 +1699,7 @@ def poller_loop():
             POLLER_STATE["cycles"] += 1
         except Exception as e:
             print("[POLLER] err:", e)
-        time.sleep(2)
+        time.sleep(10)
 
 
 # ============================================================
@@ -2188,82 +2128,9 @@ def main_menu_text(uid):
     txt += "👇 <i>اختر الخدمة التي تريدها من الأزرار بالأسفل:</i>"
     return txt
 
-def _ensure_watch_tables():
-    try:
-        conn = db()
-        conn.execute("""CREATE TABLE IF NOT EXISTS otp_watch (
-            user_id INTEGER PRIMARY KEY, platform TEXT DEFAULT '', country TEXT DEFAULT '',
-            numbers TEXT DEFAULT '', updated REAL DEFAULT 0)""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS otp_deliveries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, phone TEXT DEFAULT '',
-            code TEXT DEFAULT '', platform TEXT DEFAULT '', delivered_at REAL DEFAULT 0)""")
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print("[WATCH] tables err:", e)
-
-
-def _log_watch(uid, platform, country, numbers):
-    try:
-        _ensure_watch_tables()
-        conn = db()
-        conn.execute("INSERT OR REPLACE INTO otp_watch (user_id, platform, country, numbers, updated) VALUES (?,?,?,?,?)",
-                     (uid, str(platform), str(country), ",".join(numbers), time.time()))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
-
-def _log_delivery(uid, phone, code, platform):
-    try:
-        _ensure_watch_tables()
-        conn = db()
-        conn.execute("INSERT INTO otp_deliveries (user_id, phone, code, platform, delivered_at) VALUES (?,?,?,?,?)",
-                     (uid, str(phone), str(code), str(platform), time.time()))
-        conn.execute("DELETE FROM otp_deliveries WHERE id NOT IN (SELECT id FROM otp_deliveries ORDER BY id DESC LIMIT 2000)")
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
-
-def _watch_phone_match(disp, shown):
-    """يطابق رقم الكود (حتى لو مخفي جزئياً مثل 47407•••237) مع الأرقام المعروضة للمستخدم"""
-    d = str(disp or "")
-    digits = re.sub(r"\D", "", d)
-    if not digits:
-        return False
-    masked = bool(re.search(r"[^\d+\s\-()]", d))
-    if masked:
-        m = re.match(r"^\D*(\d+)\D+(\d+)\D*$", d)
-        if not m:
-            return False
-        pre, suf = m.group(1), m.group(2)
-        return any(n.startswith(pre) and n.endswith(suf) for n in shown)
-    return any(n == digits or n.endswith(digits) or digits.endswith(n) for n in shown)
-
-
-def _norm_tg_link(u, fallback=""):
-    u = str(u or "").strip()
-    if u.startswith("@"):
-        u = "https://t.me/" + u[1:]
-    elif u.startswith(("t.me/", "telegram.me/")):
-        u = "https://" + u
-    elif u and u.replace("_", "").isalnum() and not u.isdigit():
-        u = "https://t.me/" + u
-    elif u.isdigit():
-        u = "tg://user?id=" + u
-    if u.startswith(("http://", "https://", "tg://")) and len(u) > 8:
-        return u
-    return fallback
-
-
 def send_otp_message(chat_id, flag, number, language, sms_text, code, support_link="https://t.me/",
                      bot_link="https://t.me/", admin_link="https://t.me/", panel_name=None,
                      platform=None, country_name=None):
-    admin_link = _norm_tg_link(admin_link, "tg://user?id=" + str(MAIN_ADMIN_ID))
-    bot_link = _norm_tg_link(bot_link, bot_link)
     safe_sms = html.escape(sms_text) if sms_text else ""
     _style = setting_get("otp_style", "quote")
     if _style not in OTP_STYLES:
@@ -2331,12 +2198,9 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 # [FORWARD DECLARATION] تعريف مسبق لضمان عمل الدوال
 # ============================================================
 def show_numbers_page(chat_id, platform, country, page=0, edit_msg=None):
-    if chat_id not in WATCHING_USERS:
-        WATCHING_USERS[chat_id] = {}
-    WATCHING_USERS[chat_id][(platform, country)] = time.time()
-
     nums = numbers_list(platform=platform, country=country)
     if not nums:
+        watch_clear(chat_id)
         kb = InlineKeyboardMarkup(row_width=1)
         kb.add(_kb_btn("⬅️ القائمة الرئيسية", "menu:home"))
         try:
@@ -2352,15 +2216,7 @@ def show_numbers_page(chat_id, platform, country, page=0, edit_msg=None):
     total_pages = max(1, (len(nums) + per_page - 1) // per_page)
     page = int(page) % total_pages
     four = nums[page * per_page:(page + 1) * per_page]
-    try:
-        _w = WATCHING_USERS[chat_id]
-        _w["current_numbers"] = [re.sub(r"\D", "", str(n["phone"])) for n in four]
-        _w["platform"] = platform
-        _w["country"] = country
-        _w["last_time"] = time.time()
-        _log_watch(chat_id, platform, country, _w["current_numbers"])
-    except Exception:
-        pass
+    watch_register(chat_id, platform, country, [n["phone"] for n in four])
 
     flag = "🌍"
     try:
@@ -2372,6 +2228,7 @@ def show_numbers_page(chat_id, platform, country, page=0, edit_msg=None):
 
     text = ("⏳ <b>انتظار الكود...</b>" + "\n" +
             "<i>ستستقبل الرسائل تلقائياً عند وصولها</i>\n" +
+            ("📡 <b>الاستقبال مفعّل</b> لهذه الأرقام لمدة " + str(watch_window_sec() // 60) + " دقيقة\n" if delivery_enabled() else "") +
             flag + " <b>" + html.escape(str(country)) + "</b> — " + html.escape(str(platform)) + "\n")
 
     kb = InlineKeyboardMarkup(row_width=1)
@@ -2397,6 +2254,7 @@ def show_numbers_page(chat_id, platform, country, page=0, edit_msg=None):
     kb.add(_kb_btn("🔄 تغيير الرقم", "sw:" + str(platform) + ":" + str(country) + ":" + str(page), style="danger"))
     kb.add(_kb_btn("🌍 تغيير الدولة", "selp:" + str(platform), style="primary"))
 
+    kb.add(_kb_btn("📩 أرقامي النشطة", "wch:list", style="primary"))
     group = setting_get("channel_link", "") or setting_get("support_url", "")
     gb = _kb_btn("🔑 جروب البوت", url=group, style="success") if _valid_url(group) else None
     if gb:
@@ -2586,9 +2444,7 @@ def _layout_rows(include_admin):
 
 
 def main_menu_kb(uid):
-    """بناء القائمة الرئيسية (مع أزرار احتياطية لو الداتابيز فاضية)"""
-    
-    # قائمة الأزرار الافتراضية
+    """بناء القائمة الرئيسية (نسخة نظيفة تضمن ظهور كل الأزرار)"""
     default_buttons = [
         ("btn_platforms", "📱 المنصات", "menu:getnum", "primary"),
         ("btn_last_codes", "😩 آخر الأكواد", "menu:last_codes", "success"),
@@ -2597,56 +2453,45 @@ def main_menu_kb(uid):
         ("btn_explore", "🌐 استكشف", "menu:explore", "primary"),
         ("btn_settings", "📊 الترافيك المباشر", "menu:traffic", "primary"),
     ]
-    
     if user_is_admin(uid):
         default_buttons.append(("btn_admin", "👮 لوحة الأدمن", "admin:home", "danger"))
 
-    # محاولة قراءة الأزرار من الداتابيز (لو موجودة)
-    rows = []
+    kb = InlineKeyboardMarkup(row_width=2)
+    row = []
+    
+    # 1. إضافة الأزرار الأساسية أولاً
+    for key, label, cb, style in default_buttons:
+        row.append(InlineKeyboardButton(label, callback_data=cb, style=style))
+        if len(row) == 2:
+            kb.row(*row)
+            row = []
+    if row:
+        kb.row(*row)
+
+    # 2. إضافة الأزرار المخصصة من الداتابيز (اللي بتبدأ بـ custom_)
     try:
         conn = db()
-        rows = conn.execute("SELECT button_key, row_idx, col_idx FROM main_menu_grid ORDER BY row_idx ASC, col_idx ASC").fetchall()
+        custom_btns = conn.execute("SELECT key, label_ar, style FROM button_config WHERE key LIKE 'custom_%'").fetchall()
         conn.close()
-    except Exception:
-        rows = []
-
-    kb = InlineKeyboardMarkup(row_width=2)
-    
-    # لو الداتابيز فاضية، استخدم التخطيط من الذاكرة (RAM)
-    if not rows or LAYOUT_EDITED[0]:
-        def _mk(key):
-            cb, style = LAYOUT_ACTIONS.get(key, (key, None))
-            label = LAYOUT_NAMES.get(key, key)
-            _ov = BTN_RAM.get(key)
-            if _ov:
-                _d = _btn_row_merge(key)
-                if not _d.get("visible", 1):
-                    return None
-                label = ((_d["icon"] + " ") if _d["icon"] else "") + (_d["label_ar"] or key)
-                _st = (_d.get("style") or "").split(":")[0].strip()
-                style = _st if _st in ("primary", "success", "danger") else None
-                if "رجوع" in label or "القائمة الرئيسية" in label:
-                    style = "danger"
-            try:
-                return InlineKeyboardButton(label, callback_data=cb, style=style)
-            except TypeError:
-                return InlineKeyboardButton(label, callback_data=cb)
-        for row in _layout_rows(user_is_admin(uid)):
-            cur = []
-            for key, w in row:
-                _b = _mk(key)
-                if _b is None:
-                    continue
-                if w >= 2:
-                    if cur:
-                        kb.row(*cur)
-                        cur = []
-                    kb.row(_b)
+        for c in custom_btns:
+            key = c["key"]
+            label = c["label_ar"] or key
+            style = c["style"] or None
+            url = setting_get(key + "_url", "")
+            if url:
+                if url.startswith("https://") and "." in url:
+                    # يفتح داخل تيليجرام كـ Web App
+                    try:
+                        kb.add(InlineKeyboardButton(label, web_app=WebAppInfo(url=url), style=style))
+                    except Exception:
+                        kb.add(InlineKeyboardButton(label, url=url, style=style))
                 else:
-                    cur.append(_b)
-            if cur:
-                kb.row(*cur)
-        return kb
+                    # رابط عادي يفتح خارجياً
+                    kb.add(InlineKeyboardButton(label, url=url, style=style))
+    except Exception:
+        pass
+
+    return kb
 
     # لو الداتابيز فيها بيانات، ابني الأزرار منها
     callback_map = {
@@ -4300,32 +4145,6 @@ def cb_ec_reset(call):
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "num:upload_new")
-def cb_num_upload_new_pick(call):
-    if not user_is_admin(call.from_user.id):
-        return
-    kb = InlineKeyboardMarkup(row_width=2)
-    row = []
-    for _n, _ic in PLATFORMS:
-        row.append(btn(_ic + " " + _n, "num:upload_plat:" + _n, BTN.PRIMARY))
-        if len(row) == 2:
-            kb.row(*[x for x in row if x])
-            row = []
-    if row:
-        kb.row(*[x for x in row if x])
-    kb.add(btn("✍️ منصة أخرى (كتابة اسم)", "num:upload_typed", BTN.SUCCESS))
-    kb.add(btn("⬅️ إلغاء", "admin:numbers", BTN.DANGER))
-    txt = "📱 <b>اختر المنصة</b> التي تنتمي إليها الأرقام:"
-    try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        bot.send_message(call.message.chat.id, txt, reply_markup=kb, parse_mode="HTML")
-    try:
-        bot.answer_callback_query(call.id)
-    except Exception:
-        pass
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "num:upload_typed")
 def cb_num_upload_new(call):
     if not user_is_admin(call.from_user.id):
         return
@@ -5752,6 +5571,10 @@ def src_handle_text(txt):
     if not code_add(phone or "قناة", code, pname or "قناة", cname, str(txt)[:200]):
         return False
     CHANNEL_STATE["received"] += 1
+    try:
+        deliver_code(phone, code, src_sms_part(txt), pname, cname, flag, "SRC")
+    except Exception as _e:
+        print("[DELIVER] src err:", _e)
     print("[CHANNEL] +" + code)
     fwd = setting_get("forward_channel_id", "")
     if setting_get("src_repost", "1") == "1" and fwd:
@@ -7007,33 +6830,30 @@ def cb_custom_color(call):
     uid = call.from_user.id
     if not user_is_admin(uid): return
     color = call.data.split(":")[1]
-    
     s = get_state(uid)
     if s.get("state") != "add_custom_step3":
         return
     data = s["data"]
     label = data["label"]
     url = data["url"]
-    
     import random
     key = f"custom_{random.randint(1000, 9999)}"
-    
-    # حفظ في قاعدة البيانات
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO button_config (key, label_ar, style, visible) VALUES (?, ?, ?, 1)", (key, label, color))
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key + "_url", url))
-    
-    # إضافة في التخطيط (في آخر صف)
-    c.execute("SELECT COALESCE(MAX(row_idx), 0) + 1 FROM main_menu_grid")
-    new_row = c.fetchone()[0]
-    c.execute("INSERT INTO main_menu_grid (button_key, row_idx, col_idx, width) VALUES (?, ?, 0, 2)", (key, new_row))
-    conn.commit()
-    conn.close()
-    
-    clear_state(uid)
-    bot.send_message(call.message.chat.id, f"✅ <b>تم إضافة الزرار ({label}) بنجاح!</b>\n\nاعمل /start عشان تشوفه.", parse_mode="HTML")
-
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO button_config (key, label_ar, style, visible) VALUES (?, ?, ?, 1)", (key, label, color))
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key + "_url", url))
+        c.execute("CREATE TABLE IF NOT EXISTS main_menu_grid (button_key TEXT PRIMARY KEY, row_idx INTEGER, col_idx INTEGER, width INTEGER)")
+        c.execute("SELECT COALESCE(MAX(row_idx), 0) + 1 FROM main_menu_grid")
+        new_row = c.fetchone()[0]
+        c.execute("INSERT OR REPLACE INTO main_menu_grid (button_key, row_idx, col_idx, width) VALUES (?, ?, 0, 2)", (key, new_row))
+        conn.commit()
+        conn.close()
+        clear_state(uid)
+        bot.send_message(call.message.chat.id, f"✅ تم إضافة الزرار ({label}) بنجاح! اعمل /start", parse_mode="HTML")
+    except Exception as e:
+        clear_state(uid)
+        bot.send_message(call.message.chat.id, f"❌ خطأ: {str(e)[:100]}")
 
 @bot.callback_query_handler(func=lambda c: c.data == "admin:del_custom")
 def cb_admin_del_custom(call):
@@ -11038,6 +10858,380 @@ def _run_web_server():
 
 # تشغيل السيرفر في الخلفية (Thread منفصل عشان ما يعطلش البوت)
 threading.Thread(target=_run_web_server, daemon=True).start()
+
+
+# ============================================================
+# 📩 محرك التسليم الذكي v2 — يوصّل الكود لمن اختار الرقم
+# ------------------------------------------------------------
+# • مراقبة الأرقام محفوظة في SQLite (تعيش بعد إعادة التشغيل)
+# • مطابقة الأرقام الكاملة والمخفية (96771•••678) بدقة
+# • عدة مستخدمين على نفس الرقم = الكل يستلم
+# • منع التكرار + أزرار: نسخ الكود / Nmbr Bot / Admin / الجروب
+# • أوامر: /watch للمستخدم — /delivery للأدمن
+# ============================================================
+_WATCH_LOCK = threading.RLock()
+_WATCH_READY = {"ok": False}
+_MASK_CHARS = "•*xX.✱●"
+_PCODE_MAP = {"wh": "whatsapp", "tg": "telegram", "fb": "facebook", "ig": "instagram", "tw": "twitter",
+              "gg": "google", "ap": "apple", "tt": "tiktok", "dc": "discord", "sc": "snapchat",
+              "واتساب": "whatsapp", "تيليجرام": "telegram", "فيسبوك": "facebook", "انستقرام": "instagram",
+              "تويتر": "twitter", "جوجل": "google", "آبل": "apple", "تيكتوك": "tiktok", "ديسكورد": "discord",
+              "سناب": "snapchat"}
+_SHORT_PNAME = {"whatsapp": "WH", "telegram": "TG", "facebook": "FB", "instagram": "IG", "twitter": "TW",
+                "google": "GG", "apple": "AP", "tiktok": "TT", "discord": "DC", "snapchat": "SC"}
+
+
+def _wconn():
+    """اتصال قاعدة البيانات مع إنشاء جداول المحرك عند أول استخدام"""
+    conn = db()
+    if not _WATCH_READY["ok"]:
+        with _WATCH_LOCK:
+            conn.execute("""CREATE TABLE IF NOT EXISTS otp_watch (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, phone TEXT, platform TEXT,
+                country TEXT, started REAL, expires REAL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_otpw_user ON otp_watch(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_otpw_exp ON otp_watch(expires)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS otp_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, phone TEXT, code TEXT, ts REAL,
+                UNIQUE(user_id, phone, code))""")
+            conn.commit()
+            _WATCH_READY["ok"] = True
+    return conn
+
+
+def _digits(s):
+    return re.sub(r"\D", "", str(s or ""))
+
+
+def _pnorm(p):
+    s = re.sub(r"[^a-z0-9\u0600-\u06ff]", "", str(p or "").lower())
+    return _PCODE_MAP.get(s, s)
+
+
+def _platform_loose(a, b):
+    a, b = _pnorm(a), _pnorm(b)
+    if not a or not b:
+        return True
+    return a in b or b in a
+
+
+def delivery_enabled():
+    return str(setting_get("delivery_on", "1")) == "1"
+
+
+def watch_window_sec():
+    try:
+        m = int(setting_get("watch_window_min", "15") or 15)
+    except Exception:
+        m = 15
+    return max(1, min(m, 240)) * 60
+
+
+def watch_register(uid, platform, country, phones):
+    """يسجّل الأرقام التي ظهرت للمستخدم (يستبدل مراقبته السابقة) لمدة النافذة المحددة"""
+    try:
+        now_ts = time.time()
+        exp = now_ts + watch_window_sec()
+        with _WATCH_LOCK:
+            conn = _wconn()
+            conn.execute("DELETE FROM otp_watch WHERE user_id=?", (uid,))
+            for ph in phones:
+                d = _digits(ph)
+                if d:
+                    conn.execute("INSERT INTO otp_watch (user_id, phone, platform, country, started, expires) "
+                                 "VALUES (?,?,?,?,?,?)", (uid, d, str(platform or ""), str(country or ""), now_ts, exp))
+            conn.execute("DELETE FROM otp_watch WHERE expires < ?", (now_ts - 3600,))
+            conn.execute("DELETE FROM otp_deliveries WHERE ts < ?", (now_ts - 21600,))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print("[WATCH] register err:", e)
+
+
+def watch_clear(uid):
+    try:
+        with _WATCH_LOCK:
+            conn = _wconn()
+            conn.execute("DELETE FROM otp_watch WHERE user_id=?", (uid,))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print("[WATCH] clear err:", e)
+
+
+def watch_active(uid=None):
+    now_ts = time.time()
+    conn = _wconn()
+    if uid is None:
+        rows = conn.execute("SELECT * FROM otp_watch WHERE expires >= ?", (now_ts,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM otp_watch WHERE user_id=? AND expires >= ? ORDER BY id",
+                            (uid, now_ts)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def phone_matches(incoming_raw, watched_digits):
+    """مطابقة رقم وارد (كامل أو مخفي مثل 96771•••678) مع رقم مراقَب"""
+    raw = str(incoming_raw or "").strip()
+    w = _digits(watched_digits)
+    if not raw or not w:
+        return False
+    if any(ch in raw for ch in _MASK_CHARS):
+        first = min((raw.find(ch) for ch in _MASK_CHARS if ch in raw))
+        last = max((raw.rfind(ch) for ch in _MASK_CHARS if ch in raw))
+        pre, suf = _digits(raw[:first]), _digits(raw[last + 1:])
+        if len(pre) + len(suf) < 6:
+            return False
+        return w.startswith(pre) and (w.endswith(suf) if suf else True)
+    a = _digits(raw)
+    if not a:
+        return False
+    if a == w:
+        return True
+    return min(len(a), len(w)) >= 8 and (w.endswith(a) or a.endswith(w))
+
+
+def watch_find(phone_raw, platform=""):
+    """يرجع قائمة المستخدمين الذين يراقبون هذا الرقم (بدون تكرار)"""
+    raw = str(phone_raw or "")
+    masked = any(ch in raw for ch in _MASK_CHARS)
+    found = []
+    for r in watch_active():
+        if not phone_matches(raw, r["phone"]):
+            continue
+        # الرقم الكامل المطابق تماماً = مؤكد. المخفي يحتاج توافق المنصة (بتساهل)
+        if masked and not _platform_loose(platform, r.get("platform")):
+            continue
+        if r["user_id"] not in found:
+            found.append(r["user_id"])
+    return found
+
+
+def _otp_buttons(code, with_style=True):
+    """نفس أزرار القناة: الكود (نسخ) + Nmbr Bot + Admin + الجروب"""
+    st = (lambda s: s) if with_style else (lambda s: None)
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.row(_kb_btn(str(code), copy_text=str(code), style=st("success")))
+    row = []
+    try:
+        bot_link = "https://t.me/" + get_bot_username()
+    except Exception:
+        bot_link = ""
+    admin_link = setting_get("admin_link", "") or ("tg://user?id=" + str(MAIN_ADMIN_ID))
+    if _valid_url(bot_link):
+        row.append(_kb_btn(setting_get("btn_bot_text", "🤖 Nmbr Bot"), url=bot_link, style=st("primary")))
+    if _valid_url(admin_link):
+        row.append(_kb_btn(setting_get("admin_btn_name", "👑 Admin"), url=admin_link, style=st("danger")))
+    if row:
+        kb.row(*row)
+    group = setting_get("channel_link", "")
+    if _valid_url(group):
+        kb.row(_kb_btn("🔑 جروب البوت", url=group, style=st("success")))
+    return kb
+
+
+def _user_notify_text(phone_raw, code, msg_text, platform, cname, flag, panel_name=None):
+    digits = _digits(phone_raw)
+    masked = any(ch in str(phone_raw) for ch in _MASK_CHARS)
+    shown = str(phone_raw) if masked else ("+" + digits if digits else "—")
+    pkey = _pnorm(platform) or _pnorm(otp_platform(msg_text)[0])
+    pname = (platform or otp_platform(msg_text)[0] or "OTP")
+    pname_h = html.escape(str(pname))
+    safe_sms = html.escape(str(msg_text or ""))
+    style = str(setting_get("notify_style", "classic"))
+    custom = setting_get("notify_template", "")
+    if custom:
+        short = _SHORT_PNAME.get(pkey, str(pname)[:2].upper())
+        t = custom.replace("{platform}", short).replace("{number}", shown)
+        t = t.replace("{country}", str(cname or "")).replace("{code}", str(code))
+        t = t.replace("{flag}", str(flag or "🌍")).replace("{lang}", "EN" if str(msg_text or "").isascii() else "AR")
+        try:
+            _f, _n, _cc = detect_country(digits)
+            t = t.replace("{iso}", COUNTRIES.get(_cc, ("", ""))[0] or "XX")
+        except Exception:
+            t = t.replace("{iso}", "XX")
+        return t.replace("{sms}", safe_sms).replace("{prefix}", html.escape(str(panel_name or "MATRUI_OTP")))
+    if style == "channel":
+        return otp_render(setting_get("otp_style", "quote"), flag, shown, "ar", safe_sms, code, msg_text,
+                          panel_name=panel_name or "MATRUI_OTP", platform=platform, country_name=cname)
+    t = "🔥 <b>كود جديد وصل!</b> 🔥\n"
+    t += "📱 <b>" + pname_h + "</b> | " + str(flag or "🌍") + " " + html.escape(str(cname or "")) + "\n"
+    t += "☎️ <code>" + html.escape(shown) + "</code>\n\n"
+    t += "🔑 <b>الكود:</b> <code>" + html.escape(str(code)) + "</code>"
+    if safe_sms:
+        t += "\n\n<blockquote>" + safe_sms[:300] + "</blockquote>"
+    t += "\n🕒 " + datetime.now().strftime("%H:%M:%S")
+    return t
+
+
+def deliver_code(phone_raw, code, msg_text="", platform="", cname="", flag="🌍", panel_name=None):
+    """يوصّل الكود لكل من اختار هذا الرقم. يرجع عدد من وصلهم الكود."""
+    if not delivery_enabled() or not code:
+        return 0
+    users = watch_find(phone_raw, platform)
+    if not users:
+        return 0
+    digits = _digits(phone_raw) or str(phone_raw)
+    text = _user_notify_text(phone_raw, code, msg_text, platform, cname, flag, panel_name)
+    sent = 0
+    for uid in users[:100]:
+        try:
+            with _WATCH_LOCK:
+                conn = _wconn()
+                cur = conn.execute("INSERT OR IGNORE INTO otp_deliveries (user_id, phone, code, ts) VALUES (?,?,?,?)",
+                                   (uid, digits, str(code), time.time()))
+                conn.commit()
+                fresh = cur.rowcount > 0
+                conn.close()
+            if not fresh:
+                continue
+            ok = False
+            for with_style in (True, False):
+                try:
+                    bot.send_message(uid, text, reply_markup=_otp_buttons(code, with_style), parse_mode="HTML")
+                    ok = True
+                    break
+                except Exception as e:
+                    es = str(e).lower()
+                    if "blocked" in es or "deactivated" in es or "chat not found" in es:
+                        watch_clear(uid)
+                        break
+                    if "button" not in es and "parse" not in es:
+                        break
+            if ok:
+                sent += 1
+                try:
+                    user_stats_add(uid, 0.0)
+                except Exception:
+                    pass
+        except Exception as e:
+            print("[DELIVER] err:", e)
+    if sent:
+        print("[DELIVER] ✅ code ->", sent, "user(s)")
+    return sent
+
+
+# ----------------------- أوامر المستخدم: /watch -----------------------
+def _watch_view(uid):
+    rows = watch_active(uid)
+    kb = InlineKeyboardMarkup(row_width=1)
+    if not rows:
+        kb.add(_kb_btn("📱 اختر رقماً", "menu:home", style="success"))
+        return ("📭 <b>لا توجد أرقام نشطة</b>\n<i>افتح قسم المنصات واختر رقماً ليبدأ استقبال الأكواد.</i>", kb)
+    left = int(max(0, rows[0]["expires"] - time.time()) // 60)
+    txt = ("📡 <b>أرقامي النشطة</b>\n"
+           "🏷 " + html.escape(str(rows[0]["platform"])) + " — " + html.escape(str(rows[0]["country"])) + "\n"
+           "⏱ ينتهي الاستقبال بعد ~<b>" + str(left) + "</b> دقيقة\n\n")
+    for r in rows:
+        txt += "☎️ <code>+" + r["phone"] + "</code>\n"
+        kb.add(_kb_btn("📋 +" + r["phone"], copy_text=r["phone"], style="success"))
+    txt += "\n✅ أي كود يصل لهذه الأرقام يُرسل لك فوراً."
+    kb.row(_kb_btn("🔄 تمديد المدة", "wch:extend", style="primary"),
+           _kb_btn("⏹ إيقاف الاستقبال", "wch:stop", style="danger"))
+    kb.add(_kb_btn("⬅️ القائمة الرئيسية", "menu:home", style="danger"))
+    return txt, kb
+
+
+@bot.message_handler(commands=["watch", "mynumbers"])
+def cmd_watch(msg):
+    txt, kb = _watch_view(msg.from_user.id)
+    bot.send_message(msg.chat.id, txt, reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("wch:"))
+def cb_watch(call):
+    uid = call.from_user.id
+    act = call.data.split(":", 1)[1]
+    if act == "stop":
+        watch_clear(uid)
+        bot.answer_callback_query(call.id, "⏹ تم إيقاف الاستقبال")
+    elif act == "extend":
+        rows = watch_active(uid)
+        if rows:
+            watch_register(uid, rows[0]["platform"], rows[0]["country"], [r["phone"] for r in rows])
+            bot.answer_callback_query(call.id, "✅ تم التمديد")
+        else:
+            bot.answer_callback_query(call.id, "لا توجد أرقام نشطة", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id)
+    txt, kb = _watch_view(uid)
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=kb)
+    except Exception as e:
+        if "not modified" not in str(e).lower():
+            bot.send_message(call.message.chat.id, txt, reply_markup=kb)
+
+
+# ----------------------- لوحة الأدمن: /delivery -----------------------
+def _delivery_view():
+    conn = _wconn()
+    day = time.time() - 86400
+    n_del = conn.execute("SELECT COUNT(*) FROM otp_deliveries WHERE ts>=?", (day,)).fetchone()[0]
+    conn.close()
+    act = watch_active()
+    users = len({r["user_id"] for r in act})
+    on = delivery_enabled()
+    style = str(setting_get("notify_style", "classic"))
+    txt = ("📩 <b>محرك تسليم الأكواد</b>\n\n"
+           "الحالة: " + ("🟢 يعمل" if on else "🔴 متوقف") + "\n"
+           "⏱ نافذة المراقبة: <b>" + str(watch_window_sec() // 60) + "</b> دقيقة\n"
+           "🎨 شكل الإشعار: <b>" + ("كلاسيكي (كود جديد وصل!)" if style == "classic" else "مثل القناة") + "</b>\n\n"
+           "👥 مستخدمون يراقبون الآن: <b>" + str(users) + "</b>\n"
+           "☎️ أرقام مراقَبة: <b>" + str(len(act)) + "</b>\n"
+           "📨 أكواد وصلت (24 ساعة): <b>" + str(n_del) + "</b>")
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(_kb_btn("⏹ إيقاف التسليم" if on else "▶️ تشغيل التسليم", "dlv:toggle", style="danger" if on else "success"))
+    kb.row(_kb_btn("➖ 5 دقائق", "dlv:win:-5", style="primary"), _kb_btn("➕ 5 دقائق", "dlv:win:5", style="primary"))
+    kb.add(_kb_btn("🎨 تبديل شكل الإشعار", "dlv:style", style="primary"))
+    kb.row(_kb_btn("🧪 تجربة وصول كود", "dlv:test", style="success"), _kb_btn("🗑 مسح المراقبات", "dlv:clear", style="danger"))
+    return txt, kb
+
+
+@bot.message_handler(commands=["delivery"])
+def cmd_delivery(msg):
+    if not user_is_admin(msg.from_user.id):
+        return
+    txt, kb = _delivery_view()
+    bot.send_message(msg.chat.id, txt, reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("dlv:"))
+def cb_delivery(call):
+    uid = call.from_user.id
+    if not user_is_admin(uid):
+        bot.answer_callback_query(call.id, "⛔", show_alert=True)
+        return
+    parts = call.data.split(":")
+    act = parts[1]
+    note = None
+    if act == "toggle":
+        setting_set("delivery_on", "0" if delivery_enabled() else "1")
+    elif act == "win":
+        cur = watch_window_sec() // 60
+        setting_set("watch_window_min", str(max(1, min(240, cur + int(parts[2])))))
+    elif act == "style":
+        setting_set("notify_style", "channel" if str(setting_get("notify_style", "classic")) == "classic" else "classic")
+    elif act == "clear":
+        conn = _wconn()
+        conn.execute("DELETE FROM otp_watch")
+        conn.commit()
+        conn.close()
+        note = "🗑 تم مسح كل المراقبات"
+    elif act == "test":
+        txt = _user_notify_text("+4741642515", "998877", "Your TikTok code: 998877", "TikTok", "النرويج", "🇳🇴", "TEST")
+        try:
+            bot.send_message(uid, txt, reply_markup=_otp_buttons("998877"), parse_mode="HTML")
+            note = "🧪 أُرسلت تجربة الوصول"
+        except Exception as e:
+            note = "فشل: " + str(e)[:150]
+    bot.answer_callback_query(call.id, note)
+    txt, kb = _delivery_view()
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=kb)
+    except Exception:
+        pass
+
 
 
 def main():
