@@ -1,4 +1,3 @@
 pyTelegramBotAPI
+flask
 requests
-urllib3
-flask>=3.0.0
