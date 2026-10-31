@@ -2,3 +2,5 @@ pyTelegramBotAPI
 flask
 requests
 psutil
+telethon
+Pillow

@@ -44,7 +44,7 @@ ensure_packages()
 # ============================================================
 # الإعدادات
 # ============================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "7861926240:AAF5vQERHMOuYS2WBS2TBOXQ9TDF4Kb_Fts")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8311054730:AAEYjb3jdUdeaq6vZtptHhYvyu9BkoSxmuU")
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "7325566792").split(",")]
 DEVELOPER_USERNAME = "E_E_72"
 
@@ -793,51 +793,21 @@ def install_single_pkg(pid, pkg):
     if not pkg:
         return False, "اسم المكتبة فاضي"
 
-    pkg_name = re.split(r'[=<>!;]', pkg)[0].strip()
+    pkg_name = pkg.split("=")[0].split(">")[0].split("<")[0].split("!")[0].split(";")[0].strip()
     if not pkg_name:
-        return False, f"اسم غير صالح: {pkg}"
+        return False, "اسم غير صالح"
 
     try:
-        cmd = [
-            sys.executable, "-m", "pip", "install",
-            "--no-cache-dir", "--disable-pip-version-check",
-            "--user", pkg
-        ]
+        cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", pkg]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        out, _ = proc.communicate(timeout=300)
 
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, preexec_fn=os.setsid if os.name != "nt" else None
-        )
-
-        try:
-            out, _ = proc.communicate(timeout=300)
-
-            if proc.returncode == 0:
-                ver_match = re.search(
-                    rf'Successfully installed .*?{re.escape(pkg_name)}[- ](\S+)',
-                    out or ""
-                )
-                if ver_match:
-                    return True, f"<code>{pkg_name}</code> v{ver_match.group(1)}"
-                return True, f"<code>{pkg_name}</code>"
-
-            else:
-                err_lines = [l for l in (out or "").splitlines() if "ERROR" in l.upper()]
-                err = err_lines[-1] if err_lines else (out or "")[-200:]
-                return False, f"<code>{pkg_name}</code>\n<code>{err[:200]}</code>"
-
-        except subprocess.TimeoutExpired:
-            try:
-                if os.name != "nt":
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                else:
-                    proc.kill()
-            except:
-                pass
-            return False, f"<code>{pkg_name}</code> - انتهت المهلة"
-
+        if proc.returncode == 0:
+            return True, pkg_name
+        else:
+            return False, pkg_name
     except Exception as e:
-        return False, f"<code>{pkg_name}</code>\n<code>{str(e)[:120]}</code>"
+        return False, pkg_name
 
 
 def install_from_requirements(pid, reqs):
