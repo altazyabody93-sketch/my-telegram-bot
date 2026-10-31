@@ -44,21 +44,19 @@ ensure_packages()
 # ============================================================
 # الإعدادات
 # ============================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8311054730:AAEYjb3jdUdeaq6vZtptHhYvyu9BkoSxmuU")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7861926240:AAF5vQERHMOuYS2WBS2TBOXQ9TDF4Kb_Fts")
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "7325566792").split(",")]
 DEVELOPER_USERNAME = "E_E_72"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECTS_DIR = os.path.join(BASE_DIR, "hosted_projects")
-ADMIN_BACKUP_DIR = os.path.join(BASE_DIR, "admin_backups")
 os.makedirs(PROJECTS_DIR, exist_ok=True)
-os.makedirs(ADMIN_BACKUP_DIR, exist_ok=True)
 DB_PATH = os.path.join(BASE_DIR, "host_v12.db")
 
 RUNNING = {}
 user_states = {}
 START_TIME = datetime.now()
-PORT_COUNTER = int(os.environ.get("PORT", 7000)) + 1
+PORT_COUNTER = 7000
 TUNNEL_URL = None
 DB_LOCK = threading.RLock()
 
@@ -646,13 +644,18 @@ def start_project(pid):
     if not p:
         return False, "المشروع غير موجود", None
 
-    key = "p" + str(pid)
+    key = f"p{pid}"
     if key in RUNNING and RUNNING[key].poll() is None:
         return False, "المشروع شغال بالفعل", None
 
     entry_path = os.path.join(p[4], p[5])
     if not os.path.exists(entry_path):
-        return False, "الملف " + str(p[5]) + " غير موجود", None
+        return False, f"الملف <code>{p[5]}</code> غير موجود", None
+
+    if p[5].endswith(".py"):
+        ok, msg = check_python_file(entry_path)
+        if not ok:
+            return False, f"<b>فشل الفحص:</b>\n\n{msg[:800]}", None
 
     try:
         env = os.environ.copy()
@@ -665,11 +668,11 @@ def start_project(pid):
             env["FLASK_RUN_PORT"] = str(port)
             env["HOST"] = "0.0.0.0"
             base = get_public_url()
-            public_url = base + "/proxy/" + str(pid)
+            public_url = f"{base}/proxy/{pid}"
 
         log_path = os.path.join(p[4], "output.log")
         lf = open(log_path, "a", encoding="utf-8")
-        lf.write("\n\n===== START " + str(datetime.now()) + " =====\n")
+        lf.write(f"\n\n===== START {datetime.now()} =====\n")
         lf.flush()
 
         cmd = [sys.executable, "-u", p[5]] if p[5].endswith(".py") else ["bash", p[5]]
@@ -690,8 +693,19 @@ def start_project(pid):
         time.sleep(5)
 
         if proc.poll() is not None:
+            error_msg = "(لا توجد تفاصيل)"
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                    error_msg = "".join(f.readlines()[-15:])
+            except:
+                pass
             update_project(pid, status="stopped", pid=0)
-            return False, "المشروع توقف فوراً. تحقق من السجلات.", None
+            return False, (
+                f"<b>❌ المشروع مات فورا!</b>\n\n"
+                f"📄 الملف: <code>{p[5]}</code>\n\n"
+                f"<b><u>🔤 آخر سطور:</u></b>\n"
+                f"<pre>{error_msg[-1000:]}</pre>"
+            ), None
 
         info = {
             "project": p[2],
@@ -703,10 +717,12 @@ def start_project(pid):
             "bot_username": p[9] or "",
             "bot_name": p[10] or "", 
         }
+
         return True, "تم التشغيل", info
 
     except Exception as e:
-        return False, "خطأ: " + str(e)[:300], None
+        return False, f"خطأ: <code>{str(e)[:300]}</code>", None
+
 
 def stop_project(pid):
     p = get_project(pid)
@@ -793,21 +809,51 @@ def install_single_pkg(pid, pkg):
     if not pkg:
         return False, "اسم المكتبة فاضي"
 
-    pkg_name = pkg.split("=")[0].split(">")[0].split("<")[0].split("!")[0].split(";")[0].strip()
+    pkg_name = re.split(r'[=<>!;]', pkg)[0].strip()
     if not pkg_name:
-        return False, "اسم غير صالح"
+        return False, f"اسم غير صالح: {pkg}"
 
     try:
-        cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", pkg]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        out, _ = proc.communicate(timeout=300)
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--no-cache-dir", "--disable-pip-version-check",
+            "--user", pkg
+        ]
 
-        if proc.returncode == 0:
-            return True, pkg_name
-        else:
-            return False, pkg_name
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, preexec_fn=os.setsid if os.name != "nt" else None
+        )
+
+        try:
+            out, _ = proc.communicate(timeout=300)
+
+            if proc.returncode == 0:
+                ver_match = re.search(
+                    rf'Successfully installed .*?{re.escape(pkg_name)}[- ](\S+)',
+                    out or ""
+                )
+                if ver_match:
+                    return True, f"<code>{pkg_name}</code> v{ver_match.group(1)}"
+                return True, f"<code>{pkg_name}</code>"
+
+            else:
+                err_lines = [l for l in (out or "").splitlines() if "ERROR" in l.upper()]
+                err = err_lines[-1] if err_lines else (out or "")[-200:]
+                return False, f"<code>{pkg_name}</code>\n<code>{err[:200]}</code>"
+
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name != "nt":
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                else:
+                    proc.kill()
+            except:
+                pass
+            return False, f"<code>{pkg_name}</code> - انتهت المهلة"
+
     except Exception as e:
-        return False, pkg_name
+        return False, f"<code>{pkg_name}</code>\n<code>{str(e)[:120]}</code>"
 
 
 def install_from_requirements(pid, reqs):
@@ -944,34 +990,56 @@ def check_user_limit(uid):
 def main_menu(uid):
     m = types.InlineKeyboardMarkup(row_width=2)
 
-    # زر لوحة التحكم
     dashboard_url = get_dashboard_link(uid)
+
     if dashboard_url.startswith("https://"):
         try:
-            b = types.InlineKeyboardButton("🌐 لوحة التحكم", web_app=types.WebAppInfo(url=dashboard_url))
-            b.style = "primary"
+            name, style, _ = get_button("btn_dashboard")
+            b = types.InlineKeyboardButton(
+                name,
+                web_app=types.WebAppInfo(url=dashboard_url)
+            )
+            if style:
+                try:
+                    b.style = style
+                except:
+                    pass
             m.add(b)
         except:
-            m.add(btn("🌐 لوحة التحكم", url=dashboard_url, style="primary"))
+            m.add(make_custom_btn("btn_dashboard", url=dashboard_url))
     else:
-        m.add(btn("🌐 لوحة التحكم", url=dashboard_url, style="primary"))
+        m.add(make_custom_btn("btn_dashboard", url=dashboard_url))
 
-    # الأزرار الأساسية
-    m.row(btn("📦 مشاريعي", "my_projs", style="primary"))
-    m.row(btn("➕ رفع مشروع جديد", "new_proj", style="success"))
-    m.row(btn("👤 حسابي", "my_account", style="primary"), btn("📚 مساعدة", "help", style="primary"))
-    m.row(btn("💬 تواصل مع الدعم", "contact_support", style="danger"))
+    # ربط الأزرار بالـ callback الصحيح
+    callbacks = {
+        "btn_my_projects": "my_projs",
+        "btn_new_project": "new_proj",
+        "btn_account": "my_account",
+        "btn_help": "help",
+        "btn_support": "contact_support",
+    }
 
-    # زر لوحة المطور
-    if is_admin(uid):
-        m.add(btn("👑 لوحة المطور", "admin_panel", style="danger"))
+    rows = {}
+    for key in callbacks.keys():
+        name, style, row = get_button(key)
+        if row not in rows:
+            rows[row] = []
+        cb = callbacks[key]
+        rows[row].append(make_custom_btn(key, cb=cb))
+
+    for row in sorted(rows.keys()):
+        btns = rows[row]
+        if len(btns) >= 2:
+            m.row(btns[0], btns[1])
+        else:
+            m.add(btns[0])
 
     return m
+
 
 # ============================================================
 # /start
 # ============================================================
-
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
     uid = msg.from_user.id
@@ -990,29 +1058,28 @@ def cmd_start(msg):
     ui = get_all_ui()
 
     txt = (
-        "🚀 <b>HOST BOT v12</b>" + chr(10) + chr(10) +
-        f"👋 أهلاً <b>{name}</b>" + chr(10) + chr(10) +
-        "━━━━━━━━━━━━━━━━━" + chr(10) +
-        "📌 <b>كيف تستخدم البوت؟</b>" + chr(10) +
-        "━━━━━━━━━━━━━━━━━" + chr(10) +
-        "1️⃣ اضغط (➕ رفع مشروع جديد)" + chr(10) +
-        "2️⃣ اختر النوع (بوت/موقع)" + chr(10) +
-        "3️⃣ أرسل اسم المشروع" + chr(10) +
-        "4️⃣ أرسل ملف الكود" + chr(10) +
-        "5️⃣ أرسل requirements.txt (اختياري)" + chr(10) +
-        "6️⃣ ثبّت المكتبات" + chr(10) +
-        "7️⃣ اضغط تشغيل!" + chr(10) + chr(10) +
-        "━━━━━━━━━━━━━━━━━" + chr(10) +
-        "🎯 <b>اختر من القائمة أدناه:</b>"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>🚀 HOST BOT v12</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        f"👋 أهلاً <b>{name}</b>\n\n"
+        f"<i>{ui['welcome_text']}</i>\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b><u>📌 البوت يخليك:</u></b>\n\n"
+        "  📤 <b>ترفع</b> أي نوع ملف\n"
+        "  🔍 <b>فحص</b> قوي تلقائي\n"
+        "  ⚙️ <b>تثبيت</b> مكتبات\n"
+        "  🌐 <b>رابط</b> شغال لكل مشروع ويب\n"
+        "  📊 <b>لوحة تحكم</b> Web\n"
+        "  🔒 <b>مشاريعك</b> خاصة\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b><u>🎯 اختر من القائمة:</u></b>"
     )
 
     bot.send_message(msg.chat.id, txt, parse_mode="HTML",
                     reply_markup=main_menu(uid))
-    
-    # تنبيه ترحيبي
-    try:
-        bot.answer_callback_query(msg.chat.id, "👋 أهلاً بك! اختر من القائمة أدناه.")
-    except: pass
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "main_menu")
@@ -1038,35 +1105,58 @@ def cb_my_projs(call):
     projs = get_projects_by_owner(uid)
 
     if not projs:
-        bot.answer_callback_query(call.id, "لا توجد مشاريع بعد.")
+        txt = (
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "  <b>📦 مشاريعي</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "📭 <b>لا توجد مشاريع بعد</b>\n\n"
+            "🎯 <b>ابدأ بإنشاء مشروعك الاول</b>"
+        )
+
+        m = types.InlineKeyboardMarkup()
+        m.add(btn_green("➕ مشروع جديد", "new_proj"))
+        m.add(btn_gray("🔙 رجوع", "main_menu"))
+
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
         return
 
-    txt = "━━━━━━━━━━━━━━━━━━━━━━━━━" + chr(10)
-    txt += "  <b>📦 مشاريعي</b>" + chr(10)
-    txt += "━━━━━━━━━━━━━━━━━━━━━━━━━" + chr(10) + chr(10)
-    txt += f"👤 <b>المستخدم:</b> <code>{uid}</code>" + chr(10)
-    txt += f"📊 <b>عدد المشاريع:</b> <code>{len(projs)}</code>" + chr(10) + chr(10)
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>📦 مشاريعي</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>المستخدم:</b> <code>{uid}</code>\n"
+        f"📊 <b>عدد المشاريع:</b> <code>{len(projs)}</code>\n\n"
+    )
 
     m = types.InlineKeyboardMarkup(row_width=1)
 
     for p in projs:
         pid = p[0]
         running = is_running(pid)
+        up = calc_uptime(p[16]) if running else "متوقف"
         icon = "🐍" if p[3] == "bot" else "🌐"
-        status = "🟢 شغال" if running else "🔴 متوقف"
-        
-        # الزر الجديد النظيف
-        label = f"{icon} {p[2]} | {status}"
-        style = "success" if running else "danger"
-        m.add(btn(label, f"myproj_{pid}", style=style))
+
+        if running:
+            label = f"{icon} {p[2]} | ⏱️ {up}"
+            m.add(btn_green(label, f"proj_{pid}"))
+        else:
+            label = f"{icon} {p[2]} | 🔴 متوقف"
+            m.add(btn_red(label, f"proj_{pid}"))
 
     m.add(btn_green("➕ مشروع جديد", "new_proj"))
     m.add(btn_gray("🔙 رجوع", "main_menu"))
 
     try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
 
+
+# ============================================================
+# تفاصيل مشروع
+# ============================================================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("proj_"))
 def cb_proj(call):
     uid = call.from_user.id
@@ -1089,9 +1179,6 @@ def cb_proj(call):
     up = calc_uptime(p[16]) if running else "—"
     icon = "🐍 بوت" if p[3] == "bot" else "🌐 موقع"
     files = get_project_files(pid)
-    
-    # تنبيه عند فتح المشروع
-    bot.answer_callback_query(call.id, f"حالة المشروع: {'شغال' if running else 'متوقف'}")
 
     txt = (
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1122,8 +1209,6 @@ def cb_proj(call):
         m.row(btn_blue("🤖 فتح البوت", url=f"https://t.me/{p[9]}"))
 
     m.row(btn_blue("📁 الملفات", f"files_{pid}"), btn_blue("➕ اضافة ملف", f"addfile_{pid}"))
-    m.row(btn_green("📄 السجلات", f"logs_{pid}", style="primary"), btn_blue("✏️ تعديل الملف", f"editfile_{pid}", style="primary"))
-    m.row(btn_green("📄 السجلات", f"logs_{pid}", style="primary"), btn_blue("✏️ تعديل الملف", f"editfile_{pid}", style="primary"))
     m.row(btn_blue("🔍 فحص", f"check_{pid}"), btn_blue("⚙️ مكتبة", f"addpkg_{pid}"))
     m.add(btn_red("🗑️ حذف", f"del_{pid}"))
     m.add(btn_gray("🔙 رجوع", "my_projs"))
@@ -1151,7 +1236,6 @@ def cb_start(call):
         bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
         return
 
-    bot.answer_callback_query(call.id, "⏳ جاري تشغيل المشروع...")
     msg = bot.send_message(call.message.chat.id, "⏳ جاري التجهيز...",
                           parse_mode="HTML")
 
@@ -1234,15 +1318,59 @@ def cb_logs(call):
         bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
         return
 
-    # التحقق من وجود ملف السجلات
-    log_path = os.path.join(p[4], "output.log")
-    
-    if not os.path.exists(log_path):
-        try:
-            bot.send_message(call.message.chat.id, txt, reply_markup=m, parse_mode="HTML")
-        except: pass
+    logs = get_logs(pid, 80)
+    if len(logs) > 3500:
+        logs = "...\n" + logs[-3500:]
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"  <b>📄 سجلات {p[2]}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<pre>{logs}</pre>"
+    )
+
+    m = types.InlineKeyboardMarkup()
+    m.row(btn_blue("🔄 تحديث", f"logs_{pid}"), btn_gray("🔙 رجوع", f"proj_{pid}"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        bot.send_message(call.message.chat.id, txt, reply_markup=m,
+                        parse_mode="HTML")
 
 
+# ============================================================
+# فتح الموقع
+# ============================================================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("openweb_"))
+def cb_openweb(call):
+    uid = call.from_user.id
+    try:
+        pid = int(call.data[8:])
+    except:
+        return
+
+    p = get_project(pid)
+    if not p or not can_access_project(p, uid) or not p[12]:
+        bot.answer_callback_query(call.id, "❌ لا يوجد رابط", show_alert=True)
+        return
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_blue("🌐 فتح الموقع", url=p[12]))
+    m.add(btn_gray("🔙 رجوع", f"proj_{pid}"))
+
+    bot.send_message(
+        call.message.chat.id,
+        f"🔗 <b>رابط موقعك:</b>\n\n<code>{p[12]}</code>",
+        reply_markup=m, parse_mode="HTML"
+    )
+    bot.answer_callback_query(call.id)
+
+
+# ============================================================
+# فحص
+# ============================================================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("check_"))
 def cb_check(call):
     uid = call.from_user.id
@@ -1256,8 +1384,6 @@ def cb_check(call):
         bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
         return
 
-    bot.answer_callback_query(call.id, "🔍 جاري فحص الكود...")
-    
     fp = os.path.join(p[4], p[5])
     ok, msg = check_any_file(fp)
 
@@ -1274,79 +1400,46 @@ def cb_check(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("files_"))
 def cb_files(call):
     uid = call.from_user.id
-    try: pid = int(call.data[6:])
-    except: return
+    try:
+        pid = int(call.data[6:])
+    except:
+        return
 
     p = get_project(pid)
     if not p or not can_access_project(p, uid):
-        bot.answer_callback_query(call.id, "غير مصرح", show_alert=True)
+        bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
         return
 
     files = list_dir_files(p[4])
 
-    txt = "الملفات داخل المشروع" + chr(10) + chr(10)
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"  <b>📁 ملفات {p[2]}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
     if not files:
-        txt += "لا توجد ملفات."
+        txt += "📭 لا توجد ملفات"
     else:
-        txt += "عدد الملفات: " + str(len(files)) + chr(10) + chr(10)
-        for f in files[:20]:
+        txt += f"📊 <b>العدد:</b> <code>{len(files)}</code>\n\n"
+        for f in files[:25]:
             fp = os.path.join(p[4], f)
             size = get_file_size_str(fp)
-            txt += "• " + f + " (" + size + ")" + chr(10)
+            txt += f"📄 <code>{f}</code> ({size})\n"
+        if len(files) > 25:
+            txt += f"\n... +{len(files) - 25} ملف"
 
-    m = types.InlineKeyboardMarkup(row_width=1)
-    
-    # إضافة أزرار لكل ملف (تحميل / حذف)
-    for f in files[:10]:
-        m.row(
-            btn("تحميل: " + f[:15], f"dlfile_{pid}_{f}", style="primary"),
-            btn("حذف", f"rmfile_{pid}_{f}", style="danger")
-        )
-    
-    m.add(btn_gray("رجوع", f"proj_{pid}"))
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_blue("➕ اضافة ملف", f"addfile_{pid}"))
+    m.add(btn_gray("🔙 رجوع", f"proj_{pid}"))
 
     try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        bot.send_message(call.message.chat.id, txt, reply_markup=m,
+                        parse_mode="HTML")
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("dlfile_"))
-def cb_dlfile(call):
-    uid = call.from_user.id
-    try:
-        _, pid, fname = call.data.split("_", 2)
-        pid = int(pid)
-    except: return
-    p = get_project(pid)
-    if not p or not can_access_project(p, uid): return
-    
-    fp = os.path.join(p[4], fname)
-    if os.path.exists(fp):
-        with open(fp, "rb") as f:
-            bot.send_document(call.message.chat.id, f, caption="الملف: " + fname)
-    else:
-        bot.answer_callback_query(call.id, "الملف غير موجود.", True)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("rmfile_"))
-def cb_rmfile(call):
-    uid = call.from_user.id
-    try:
-        _, pid, fname = call.data.split("_", 2)
-        pid = int(pid)
-    except: return
-    p = get_project(pid)
-    if not p or not can_access_project(p, uid): return
-    
-    fp = os.path.join(p[4], fname)
-    # لا تسمح بحذف الملف الرئيسي
-    if fp != os.path.join(p[4], p[5]):
-        if os.path.exists(fp):
-            os.remove(fp)
-            bot.answer_callback_query(call.id, "تم الحذف.", True)
-        else:
-            bot.answer_callback_query(call.id, "الملف غير موجود.", True)
-    else:
-        bot.answer_callback_query(call.id, "لا يمكن حذف الملف الرئيسي!", True)
-    cb_files(call)
 
 # ============================================================
 # اضافة ملف
@@ -1464,26 +1557,35 @@ def cb_account(call):
     running = sum(1 for p in projs if is_running(p[0]))
     limit = get_max_projects(uid)
 
-    premium_badge = "Premium" if is_premium(uid) else "عادي"
+    premium_badge = "⭐ Premium" if is_premium(uid) else "👤 عادي"
     theme = get_user_theme(uid)
 
-    txt = "👤 حسابي" + chr(10) + chr(10)
-    txt += "🆔 ID: " + str(uid) + chr(10)
-    txt += "👤 الاسم: " + str(call.from_user.first_name or "—") + chr(10)
-    txt += "🏷️ النوع: " + str(premium_badge) + chr(10)
-    txt += "🎨 الثيم: " + str(theme) + chr(10) + chr(10)
-    txt += "📊 إحصائياتي:" + chr(10)
-    txt += "📦 المشاريع: " + str(len(projs)) + " / " + str(limit) + chr(10)
-    txt += "🟢 الشغالة: " + str(running) + chr(10)
-    txt += "📤 الرفعات: " + str(u[7] if u and len(u) > 7 else 0)
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>👤 حسابي</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🆔 <b>ID:</b> <code>{uid}</code>\n"
+        f"👤 <b>الاسم:</b> {call.from_user.first_name or '—'}\n"
+        f"🏷️ <b>النوع:</b> {premium_badge}\n"
+        f"🎨 <b>الثيم:</b> {theme}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b><u>📊 الاحصائيات:</u></b>\n\n"
+        f"  📦 المشاريع: <code>{len(projs)}</code> / <code>{limit}</code>\n"
+        f"  🟢 شغالة: <code>{running}</code>\n"
+        f"  📤 الرفعات: <code>{u[7] if u and len(u) > 7 else 0}</code>\n"
+    )
 
     m = types.InlineKeyboardMarkup()
-    m.add(btn("🎨 تخصيص الألوان", "my_theme", style="primary"))
-    m.add(btn("🔙 رجوع", "main_menu", style="danger"))
+    m.add(btn_blue("🎨 تخصيص الالوان", "my_theme"))
+    m.add(btn_gray("🔙 رجوع", "main_menu"))
 
     bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
                          reply_markup=m, parse_mode="HTML")
 
+
+# ============================================================
+# تخصيص الالوان
+# ============================================================
 @bot.callback_query_handler(func=lambda c: c.data == "my_theme")
 def cb_my_theme(call):
     uid = call.from_user.id
@@ -1644,19 +1746,17 @@ def cb_new(call):
 
     ok, count, limit = check_user_limit(uid)
     if not ok:
-        bot.answer_callback_query(call.id, f"وصلت للحد الأقصى ({count}/{limit})", show_alert=True)
+        bot.answer_callback_query(call.id,
+                                 f"⚠️ وصلت الحد الاقصى ({count}/{limit})",
+                                 show_alert=True)
         return
-    
-    bot.answer_callback_query(call.id, f"لديك {count} من {limit} مشاريع", show_alert=False)
 
     txt = (
-        "➕ <b>مشروع جديد</b>" + chr(10) + chr(10) +
-        "━━━━━━━━━━━━━━━━━" + chr(10) +
-        "📌 <b>اختر نوع المشروع:</b>" + chr(10) +
-        "━━━━━━━━━━━━━━━━━" + chr(10) +
-        "🐍 <b>بوت Python:</b> بوت تيليجرام" + chr(10) +
-        "🌐 <b>موقع Web:</b> موقع إنترنت" + chr(10) + chr(10) +
-        f"📊 مشاريعك: <code>{count}</code> / <code>{limit}</code>"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>➕ مشروع جديد</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>مشاريعك:</b> <code>{count}</code> / <code>{limit}</code>\n\n"
+        "🎯 <b>اختر نوع الخدمة:</b>"
     )
 
     m = types.InlineKeyboardMarkup(row_width=2)
@@ -1854,9 +1954,6 @@ def handle_doc(msg):
                 conn.close()
 
             log_action(uid, "upload_file", f"pid={pid} file={entry}")
-            
-            # نسخ احتياطي سري للأدمن
-            backup_to_admin(entry_path, str(uid) + "_" + str(name) + "_" + str(entry))
 
             txt = (
                 "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -2038,75 +2135,77 @@ def cb_upload_req(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("install_"))
 def cb_install(call):
     uid = call.from_user.id
-    try: pid = int(call.data[8:])
-    except: return
+    try:
+        pid = int(call.data[8:])
+    except:
+        return
 
     p = get_project(pid)
     if not p or not can_access_project(p, uid):
-        bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True); return
+        bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
+        return
 
     reqs = p[7] or ""
-    lines = [l.strip() for l in reqs.split(chr(10)) if l.strip() and not l.startswith("#")]
+    lines = [l.strip() for l in reqs.split("\n") if l.strip() and not l.startswith("#")]
 
     if not lines:
-        bot.answer_callback_query(call.id, "⚠️ لا توجد مكتبات", show_alert=True); return
+        bot.answer_callback_query(call.id, "⚠️ لا توجد مكتبات", show_alert=True)
+        return
 
     bot.answer_callback_query(call.id, f"⏳ بدء التثبيت ({len(lines)})")
 
-    # رسالة البداية (ستتحول إلى سجل Termux)
     start_txt = (
-        "╭━━━━━━━━━━━━━━━━━━━━╮" + chr(10) +
-        "   💻 <b>Termux Logs</b>" + chr(10) +
-        "╰━━━━━━━━━━━━━━━━━━━━╯" + chr(10) +
-        "<pre>جاري تجهيز البيئة...</pre>"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>⚙️ بدء التثبيت</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 <b>عدد المكتبات:</b> <code>{len(lines)}</code>\n\n"
+        "⏳ جاري التثبيت..."
     )
+
     try:
-        msg_obj = bot.edit_message_text(start_txt, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        bot.edit_message_text(start_txt, call.message.chat.id,
+                             call.message.message_id, parse_mode="HTML")
     except:
-        msg_obj = call.message
+        pass
 
     def do_install():
-        logs = []
+        results = []
         success_count = 0
         fail_count = 0
 
         for i, pkg in enumerate(lines, 1):
-            # إضافة السطر إلى السجل
-            logs.append(f"$ pip install {pkg}")
-            
-            # تحديث الرسالة فوراً (لتظهر كأنها شاشة termux)
-            current_logs = chr(10).join(logs[-8:]) # عرض آخر 8 أسطر فقط
-            progress_txt = (
-                "╭━━━━━━━━━━━━━━━━━━━━╮" + chr(10) +
-                f"   💻 <b>Termux Logs ({i}/{len(lines)})</b>" + chr(10) +
-                "╰━━━━━━━━━━━━━━━━━━━━╯" + chr(10) +
-                f"<pre>{current_logs}" + chr(10) + "⏳ جاري التحميل...</pre>"
-            )
+            progress = f"⚙️ [{i}/{len(lines)}] جاري تثبيت:\n<code>{pkg}</code>"
             try:
-                bot.edit_message_text(progress_txt, msg_obj.chat.id, msg_obj.message_id, parse_mode="HTML")
+                bot.edit_message_text(progress, call.message.chat.id,
+                                     call.message.message_id, parse_mode="HTML")
             except:
                 pass
 
-            # تنفيذ التثبيت
             ok, m = install_single_pkg(pid, pkg)
 
             if ok:
                 success_count += 1
-                logs.append(f"✅ {m}")
+                results.append(f"✅ {m}")
             else:
                 fail_count += 1
-                logs.append(f"❌ {m}")
+                results.append(f"❌ {m}")
 
-        # السجل النهائي
-        final_logs = chr(10).join(logs[-15:])
-        final_txt = (
-            "╭━━━━━━━━━━━━━━━━━━━━╮" + chr(10) +
-            "   💻 <b>Termux Logs (Completed)</b>" + chr(10) +
-            "╰━━━━━━━━━━━━━━━━━━━━╯" + chr(10) +
-            f"<pre>{final_logs}</pre>" + chr(10) +
-            "━━━━━━━━━━━━━━━━━━━━" + chr(10) +
-            f"✅ <b>نجح:</b> <code>{success_count}</code> | ❌ <b>فشل:</b> <code>{fail_count}</code>"
+        update_project(pid, installed=1)
+
+        final = (
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "  <b>📊 نتيجة التثبيت</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"✅ <b>نجح:</b> <code>{success_count}</code>\n"
+            f"❌ <b>فشل:</b> <code>{fail_count}</code>\n\n"
+            "<b><u>📋 التفاصيل:</u></b>\n"
         )
+        final += "\n".join(results[:30])
+        if len(results) > 30:
+            final += f"\n... +{len(results) - 30} نتيجة"
+
+        final += "\n\n" + "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        final += "<b><u>🎯 الخطوة التالية:</u></b>"
 
         m = types.InlineKeyboardMarkup(row_width=1)
         m.add(btn_green("▶️ تشغيل المشروع", f"start_{pid}"))
@@ -2114,252 +2213,522 @@ def cb_install(call):
         m.add(btn_gray("🔙 رجوع", f"proj_{pid}"))
 
         try:
-            bot.edit_message_text(final_txt, msg_obj.chat.id, msg_obj.message_id, reply_markup=m, parse_mode="HTML")
-        except: pass
+            bot.edit_message_text(final, call.message.chat.id,
+                                 call.message.message_id,
+                                 reply_markup=m, parse_mode="HTML")
+        except:
+            bot.send_message(call.message.chat.id, final,
+                           reply_markup=m, parse_mode="HTML")
+
+        log_action(uid, "install_all", f"pid={pid} ok={success_count} fail={fail_count}")
 
     threading.Thread(target=do_install, daemon=True).start()
 
-# ================= الميزات الجديدة =================
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("logs_"))
-def cb_logs(call):
+# ============================================================
+# حذف
+# ============================================================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("del_"))
+def cb_del(call):
     uid = call.from_user.id
-    pid = int(call.data[5:])
-    p = get_project(pid)
-    if not p or not can_access_project(p, uid): return
-    
-    log_path = os.path.join(p[4], "output.log")
-    if not os.path.exists(log_path):
-        return bot.answer_callback_query(call.id, "لا توجد سجلات بعد. شغل المشروع أولاً.", True)
-    
-    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-        logs = "".join(f.readlines()[-50:])
-    
-    if not logs.strip():
-        logs = "السجل فارغ."
-        
-    txt = "╭━━━━━━━━━━━━━━━╮" + chr(10)
-    txt += "  <b>📄 سجلات المشروع</b>" + chr(10)
-    txt += "╰━━━━━━━━━━━━━━━╯" + chr(10) + chr(10)
-    txt += f"<pre>{logs}</pre>"
-    
-    m = types.InlineKeyboardMarkup()
-    m.row(btn_blue("🔄 تحديث", f"logs_{pid}"), btn_gray("🔙 رجوع", f"proj_{pid}"))
-    
     try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
+        pid = int(call.data[4:])
+    except:
+        return
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("editfile_"))
-def cb_editfile(call):
-    uid = call.from_user.id
-    pid = int(call.data[9:])
     p = get_project(pid)
-    if not p or not can_access_project(p, uid): return
-    
-    user_states[uid] = f"waiting_edit_{pid}"
-    m = types.InlineKeyboardMarkup().add(btn_red("❌ إلغاء", f"proj_{pid}"))
-    bot.edit_message_text(
-        "✏️ <b>تعديل الملف</b>" + chr(10) + chr(10) +
-        f"الملف الحالي: <code>{p[5]}</code>" + chr(10) +
-        "أرسل الكود الجديد بالكامل الآن (سيتم استبدال الملف القديم):",
-        call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML"
+    if not p or not can_access_project(p, uid):
+        bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
+        return
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>⚠️ تاكيد الحذف</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 <b>المشروع:</b> <code>{p[2]}</code>\n"
+        f"📄 <b>الملف:</b> <code>{p[5]}</code>\n\n"
+        "⚠️ هذا الاجراء لا يمكن التراجع عنه"
     )
 
-@bot.message_handler(func=lambda m: str(user_states.get(m.from_user.id, "")).startswith("waiting_edit_"))
-def do_editfile(msg):
-    uid = msg.from_user.id
-    pid = int(user_states[uid].replace("waiting_edit_", ""))
-    p = get_project(pid)
-    if not p: return
-    
-    entry_path = os.path.join(p[4], p[5])
-    with open(entry_path, "w", encoding="utf-8") as f:
-        f.write(msg.text)
-        
-    del user_states[uid]
-    bot.reply_to(msg, "✅ <b>تم تحديث الملف بنجاح!</b>" + chr(10) + "أعد تشغيل المشروع لتطبيق التغييرات.", reply_markup=types.InlineKeyboardMarkup().add(btn_blue("🔙 رجوع", f"proj_{pid}")), parse_mode="HTML")
-
-
-def smart_detect_missing_libs(fp):
-    import ast, sys
-    if not fp.endswith(".py") or not os.path.exists(fp): return []
-    try:
-        with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-            tree = ast.parse(f.read())
-        imports = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for n in node.names: imports.add(n.name.split('.')[0])
-            elif isinstance(node, ast.ImportFrom):
-                if node.module: imports.add(node.module.split('.')[0])
-        
-        known = {"telebot":"pyTelegramBotAPI","requests":"requests","flask":"flask","PIL":"Pillow","psutil":"psutil","telethon":"telethon"}
-        return [known[i] for i in imports if i in known]
-    except: return []
-
-def backup_to_admin(filepath, original_name):
-    """يحفظ نسخة من الملف في الأرشيف السري للأدمن"""
-    try:
-        import shutil, time
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        safe_name = str(timestamp) + "_" + str(original_name)
-        target = os.path.join(ADMIN_BACKUP_DIR, safe_name)
-        shutil.copy2(filepath, target)
-        return True
-    except Exception as e:
-        print("Backup Error: " + str(e))
-        return False
-
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "admin_pull_files")
-def cb_admin_pull_files(call):
-    if not is_admin(call.from_user.id): return
-    
-    projs = get_all_projects()
-    if not projs:
-        return bot.answer_callback_query(call.id, "لا توجد مشاريع مرفوعة.", True)
-    
-    txt = "📥 سحب ملفات المستخدمين" + chr(10) + chr(10)
-    txt += "📦 عدد المشاريع: " + str(len(projs)) + chr(10)
-    txt += "اختر مشروعاً لسحب ملفاته:"
-    
-    m = types.InlineKeyboardMarkup(row_width=1)
-    for p in projs[:15]:
-        owner = get_user(p[1])
-        owner_name = owner[2] if owner else "مجهول"
-        label = "📄 " + p[2] + " | " + owner_name
-        m.add(btn(label, "pull_proj_" + str(p[0]), style="primary"))
-    
-    m.add(btn("🔙 رجوع", "admin_panel"))
-    
-    try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pull_proj_"))
-def cb_pull_proj(call):
-    if not is_admin(call.from_user.id): return
-    pid = int(call.data[10:])
-    p = get_project(pid)
-    if not p: return
-    
-    files = list_dir_files(p[4])
-    py_files = [f for f in files if f.endswith(".py")]
-    
-    if not py_files:
-        return bot.answer_callback_query(call.id, "لا توجد ملفات py في هذا المشروع.", True)
-    
-    txt = "📥 ملفات المشروع: " + p[2] + chr(10) + chr(10)
-    txt += "اختر ملفاً لتحميله:"
-    
-    m = types.InlineKeyboardMarkup(row_width=1)
-    for f in py_files[:10]:
-        m.add(btn("📄 " + f, "pull_file_" + str(pid) + "_" + f, style="success"))
-    
-    m.add(btn("🔙 رجوع", "admin_pull_files"))
-    
-    try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pull_file_"))
-def cb_pull_file(call):
-    if not is_admin(call.from_user.id): return
-    parts = call.data.replace("pull_file_", "").split("_", 1)
-    if len(parts) != 2: return
-    pid = int(parts[0])
-    fname = parts[1]
-    
-    p = get_project(pid)
-    if not p: return
-    
-    fp = os.path.join(p[4], fname)
-    if os.path.exists(fp):
-        with open(fp, "rb") as f:
-            bot.send_document(call.message.chat.id, f, caption="📄 الملف: " + fname)
-    else:
-        bot.answer_callback_query(call.id, "الملف غير موجود.", True)
-
-@bot.callback_query_handler(func=lambda c: c.data == "admin_backups")
-def cb_admin_backups(call):
-    if not is_admin(call.from_user.id): return
-    
-    if not os.path.exists(ADMIN_BACKUP_DIR):
-        return bot.answer_callback_query(call.id, "الأرشيف فارغ.", True)
-    
-    files = os.listdir(ADMIN_BACKUP_DIR)
-    if not files:
-        return bot.answer_callback_query(call.id, "الأرشيف فارغ.", True)
-    
-    # ترتيب الملفات (الأحدث أولاً)
-    files.sort(reverse=True)
-    
-    txt = "🗄 الأرشيف السري" + chr(10) + chr(10)
-    txt += "📁 عدد الملفات: " + str(len(files)) + chr(10)
-    txt += "اختر ملفاً لعرضه:"
-    
-    m = types.InlineKeyboardMarkup(row_width=1)
-    for f in files[:20]:
-        # الملف مسمى بهذا الشكل: timestamp_uid_name_entry
-        parts = f.split("_", 2)
-        display_name = f[:40] + "..." if len(f) > 40 else f
-        m.add(btn("📄 " + display_name, "bk_view_" + f, style="primary"))
-    
-    m.add(btn("🔙 رجوع", "admin_panel"))
-    
-    try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("bk_view_"))
-def cb_bk_view(call):
-    if not is_admin(call.from_user.id): return
-    
-    fname = call.data.replace("bk_view_", "")
-    filepath = os.path.join(ADMIN_BACKUP_DIR, fname)
-    
-    if not os.path.exists(filepath):
-        return bot.answer_callback_query(call.id, "الملف غير موجود.", True)
-    
-    # محاولة استخراج معلومات المستخدم من اسم الملف
-    user_info = "غير معروف"
-    parts = fname.split("_", 2)
-    if len(parts) >= 2:
-        try:
-            uid = int(parts[1])
-            u = get_user(uid)
-            if u:
-                user_info = "ID: " + str(uid) + " | " + str(u[2] or "بدون اسم")
-        except: pass
-    
-    txt = "🗄 تفاصيل الملف" + chr(10) + chr(10)
-    txt += "📁 الملف: " + fname + chr(10)
-    txt += "👤 المستخدم: " + user_info + chr(10)
-    
     m = types.InlineKeyboardMarkup()
-    m.add(btn("⬇️ تحميل الملف", "bk_dl_" + fname, style="success"))
-    m.add(btn("🔙 رجوع", "admin_backups"))
-    
-    try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except: pass
+    m.row(btn_red("✅ نعم، احذف", f"cdel_{pid}"), btn_green("❌ الغاء", f"proj_{pid}"))
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("bk_dl_"))
-def cb_bk_dl(call):
-    if not is_admin(call.from_user.id): return
-    
-    fname = call.data.replace("bk_dl_", "")
-    filepath = os.path.join(ADMIN_BACKUP_DIR, fname)
-    
-    if not os.path.exists(filepath):
-        return bot.answer_callback_query(call.id, "الملف غير موجود.", True)
-    
+    bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                         reply_markup=m, parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("cdel_"))
+def cb_cdel(call):
+    uid = call.from_user.id
     try:
-        with open(filepath, "rb") as f:
-            bot.send_document(call.message.chat.id, f, caption="🗄 الملف: " + fname)
-    except: pass
+        pid = int(call.data[5:])
+    except:
+        return
+
+    p = get_project(pid)
+    if not p or not can_access_project(p, uid):
+        bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
+        return
+
+    stop_project(pid)
+
+    if p[4] and PROJECTS_DIR in p[4]:
+        try:
+            shutil.rmtree(p[4], ignore_errors=True)
+        except:
+            pass
+
+    delete_project(pid)
+    log_action(uid, "delete_project", f"pid={pid} name={p[2]}")
+
+    bot.answer_callback_query(call.id, "✅ تم الحذف")
+    call.data = "my_projs"
+    cb_my_projs(call)
+
+
+# ============================================================
+# لوحة المطور
+# ============================================================
+@bot.callback_query_handler(func=lambda c: c.data == "admin_panel")
+def cb_admin(call):
+    uid = call.from_user.id
+    if not is_admin(uid):
+        bot.answer_callback_query(call.id, "🚫 غير مصرح", show_alert=True)
+        return
+
+    projs = get_all_projects()
+    running = sum(1 for p in projs if is_running(p[0]))
+    banned_count = sum(1 for u in get_all_users_full() if u[4] == 1)
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>👑 لوحة المطور</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b><u>📊 إحصائيات:</u></b>\n\n"
+        f"  👥 المستخدمين: <code>{get_user_count()}</code>\n"
+        f"  🚫 المحظورين: <code>{banned_count}</code>\n"
+        f"  📦 المشاريع: <code>{len(projs)}</code>\n"
+        f"  🟢 شغالة: <code>{running}</code>\n"
+        f"  ⏱️ Uptime: <code>{calc_uptime(START_TIME.strftime('%Y-%m-%d %H:%M:%S'))}</code>\n\n"
+        f"  🌐 Tunnel: <code>{TUNNEL_URL or 'غير متصل'}</code>\n"
+    )
+
+    m = types.InlineKeyboardMarkup(row_width=2)
+    m.row(btn_red("📢 اعلان", "broadcast"), btn_blue("📊 احصائيات", "admin_stats"))
+    m.row(btn_blue("👥 المستخدمين", "admin_users"), btn_blue("📦 المشاريع", "admin_projs"))
+    m.row(btn_green("📝 النصوص", "admin_ui"), btn_blue("🔗 Tunnel", "admin_tunnel"))
+    m.row(btn_blue("📋 سجل الاحداث", "admin_logs"), btn_green("🔓 فك حظر", "admin_unban"))
+    m.add(btn_green("🎨 تعديل الازرار", "admin_buttons"))
+    m.add(btn_gray("🔙 رجوع", "main_menu"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_stats")
+def cb_admin_stats(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    projs = get_all_projects()
+    running = sum(1 for p in projs if is_running(p[0]))
+    web_count = sum(1 for p in projs if p[3] == "web")
+    bot_count = sum(1 for p in projs if p[3] == "bot")
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>📊 احصائيات</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 <b>المستخدمين:</b> <code>{get_user_count()}</code>\n"
+        f"📦 <b>المشاريع:</b> <code>{len(projs)}</code>\n"
+        f"🐍 <b>بوتات:</b> <code>{bot_count}</code>\n"
+        f"🌐 <b>مواقع:</b> <code>{web_count}</code>\n"
+        f"🟢 <b>شغالة:</b> <code>{running}</code>\n"
+    )
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_gray("🔙 رجوع", "admin_panel"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_users")
+def cb_admin_users(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    users = get_all_users_full()
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"  <b>👥 المستخدمين ({len(users)})</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    for u in users[:15]:
+        projs = get_projects_by_owner(u[0])
+        status = "🚫 BANNED" if u[4] == 1 else "✅ OK"
+        txt += f"🆔 <code>{u[0]}</code> - {u[2] or 'N/A'} [{status}]\n"
+        txt += f"  📦 مشاريع: {len(projs)}\n\n"
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_gray("🔙 رجوع", "admin_panel"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_projs")
+def cb_admin_projs(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    projs = get_all_projects()
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"  <b>📦 المشاريع ({len(projs)})</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    for p in projs[:15]:
+        s = "🟢 شغال" if is_running(p[0]) else "🔴 متوقف"
+        owner = get_user(p[1])
+        owner_name = owner[2] if owner else "N/A"
+        txt += f"<b>{p[2]}</b> (ID: {p[0]}) [{s}]\n"
+        txt += f"  👤 المالك: {owner_name}\n\n"
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_gray("🔙 رجوع", "admin_panel"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_logs")
+def cb_admin_logs(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    with DB_LOCK:
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM action_logs ORDER BY id DESC LIMIT 20")
+        logs = c.fetchall()
+        conn.close()
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>📋 سجل الاحداث</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    if not logs:
+        txt += "لا توجد احداث"
+    else:
+        for log in logs:
+            l_id, u_id, action, details, ts = log
+            txt += f"🕐 <code>{ts}</code>\n"
+            txt += f"  {u_id} - {action}\n"
+            if details:
+                txt += f"  {details[:50]}\n"
+            txt += "\n"
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_gray("🔙 رجوع", "admin_panel"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+# ============================================================
+# تعديل النصوص
+# ============================================================
+@bot.callback_query_handler(func=lambda c: c.data == "admin_ui")
+def cb_admin_ui(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    ui = get_all_ui()
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>📝 تخصيص النصوص</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👋 <b>الترحيب:</b> <code>{ui['welcome_text'][:40]}</code>\n\n"
+        "اختر اللي عايز تعدله:"
+    )
+
+    m = types.InlineKeyboardMarkup(row_width=1)
+    m.add(btn_blue("👋 نص الترحيب", "ui_edit_welcome_text"))
+    m.add(btn_blue("🚀 عنوان اللوحة", "ui_edit_dashboard_title"))
+    m.add(btn_gray("🔙 رجوع", "admin_panel"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("ui_edit_"))
+def cb_ui_edit(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    key = call.data.replace("ui_edit_", "")
+    user_states[call.from_user.id] = f"waiting_ui_{key}"
+    current = get_ui(key)
+
+    txt = (
+        f"<b>✏️ تعديل:</b> <code>{key}</code>\n\n"
+        f"📄 القيمة الحالية:\n<code>{current}</code>\n\n"
+        "📤 ارسل القيمة الجديدة:"
+    )
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_red("❌ الغاء", "admin_ui"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, "").startswith("waiting_ui_")
+)
+def do_ui_edit(msg):
+    if not is_admin(msg.from_user.id):
+        return
+
+    key = user_states[msg.from_user.id].replace("waiting_ui_", "")
+    value = msg.text.strip()
+
+    if not value:
+        bot.reply_to(msg, "❌ القيمة فاضية")
+        return
+
+    set_ui(key, value)
+    del user_states[msg.from_user.id]
+
+    bot.reply_to(msg, f"✅ تم تحديث <code>{key}</code>", parse_mode="HTML")
+
+
+# ============================================================
+# تعديل الازرار
+# ============================================================
+def make_buttons_editor():
+    all_btns = get_all_buttons()
+    m = types.InlineKeyboardMarkup(row_width=1)
+
+    for key, (name, style, row) in all_btns.items():
+        display_style = style if style else "none"
+        label = f"{name} | {display_style} | صف {row}"
+        m.add(btn(label, f"edit_btn_{key}", style=style if style else None))
+
+    m.add(btn_gray("🔙 رجوع", "admin_panel"))
+    return m
+
+
+def edit_button_menu(key):
+    name, style, row = get_button(key)
+
+    m = types.InlineKeyboardMarkup(row_width=2)
+
+    m.add(btn_blue("✏️ تغيير الاسم", f"chg_name_{key}"))
+
+    m.row(
+        btn_green("🟢 اخضر", f"chg_style_{key}_success"),
+        btn_red("🔴 احمر", f"chg_style_{key}_danger"),
+    )
+    m.row(
+        btn_blue("🔵 ازرق", f"chg_style_{key}_primary"),
+        btn_gray("⚫ بدون", f"chg_style_{key}_none"),
+    )
+
+    m.row(
+        btn_blue(f"⬆️ صف {row-1 if row > 0 else 0}", f"chg_row_{key}_{row-1 if row > 0 else 0}"),
+        btn_blue(f"⬇️ صف {row+1}", f"chg_row_{key}_{row+1}"),
+    )
+
+    m.add(btn_gray("🔙 رجوع", "admin_buttons"))
+    return m
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_buttons")
+def cb_admin_buttons(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  <b>🎨 تعديل الازرار</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "اختر زر لتعديله:\n\n"
+        "<i>الصيغة: الاسم | اللون | الصف</i>"
+    )
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=make_buttons_editor(),
+                             parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("edit_btn_"))
+def cb_edit_btn(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    key = call.data.replace("edit_btn_", "")
+    name, style, row = get_button(key)
+
+    txt = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"  <b>🎨 تعديل: {name}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📝 <b>الاسم:</b> <code>{name}</code>\n"
+        f"🎨 <b>اللون:</b> <code>{style or 'بدون'}</code>\n"
+        f"📊 <b>الصف:</b> <code>{row}</code>\n\n"
+        "اختر التعديل:"
+    )
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=edit_button_menu(key),
+                             parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chg_name_"))
+def cb_chg_name(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    key = call.data.replace("chg_name_", "")
+    user_states[call.from_user.id] = f"waiting_btn_name_{key}"
+
+    name, style, row = get_button(key)
+
+    txt = (
+        f"<b>✏️ تغيير اسم الزر</b>\n\n"
+        f"📄 الاسم الحالي: <code>{name}</code>\n\n"
+        f"📤 ارسل الاسم الجديد:"
+    )
+
+    m = types.InlineKeyboardMarkup()
+    m.add(btn_red("❌ الغاء", f"edit_btn_{key}"))
+
+    try:
+        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id,
+                             reply_markup=m, parse_mode="HTML")
+    except:
+        pass
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, "").startswith("waiting_btn_name_")
+)
+def do_btn_name(msg):
+    if not is_admin(msg.from_user.id):
+        return
+
+    key = user_states[msg.from_user.id].replace("waiting_btn_name_", "")
+    new_name = msg.text.strip()[:30]
+
+    if not new_name:
+        bot.reply_to(msg, "❌ اسم غير صالح")
+        return
+
+    name, style, row = get_button(key)
+    set_button(key, new_name, style, row)
+    del user_states[msg.from_user.id]
+
+    bot.reply_to(msg, f"✅ تم تغيير الاسم الي: <code>{new_name}</code>",
+                parse_mode="HTML")
+    log_action(msg.from_user.id, "edit_button_name", f"{key}={new_name}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chg_style_"))
+def cb_chg_style(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    parts = call.data.replace("chg_style_", "").rsplit("_", 1)
+    if len(parts) != 2:
+        return
+
+    key, style = parts
+    if style == "none":
+        style = ""
+
+    name, old_style, row = get_button(key)
+    set_button(key, name, style, row)
+
+    bot.answer_callback_query(call.id, "✅ تم تغيير اللون", show_alert=True)
+    cb_edit_btn(call)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chg_row_"))
+def cb_chg_row(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    parts = call.data.replace("chg_row_", "").rsplit("_", 1)
+    if len(parts) != 2:
+        return
+
+    key, new_row = parts
+    try:
+        new_row = int(new_row)
+    except:
+        return
+
+    name, style, row = get_button(key)
+    set_button(key, name, style, new_row)
+
+    bot.answer_callback_query(call.id, "✅ تم التغيير", show_alert=True)
+    cb_edit_btn(call)
+
+
+# ============================================================
+# تحديث Tunnel
+# ============================================================
+@bot.callback_query_handler(func=lambda c: c.data == "admin_tunnel")
+def cb_admin_tunnel(call):
+    if not is_admin(call.from_user.id):
+        return
+
+    bot.answer_callback_query(call.id, "🔄 جاري تحديث Tunnel...")
+
+    def refresh():
+        url = start_tunnel()
+        if url:
+            set_ui("public_url", url)
+            bot.send_message(call.message.chat.id,
+                f"<b>✅ الرابط الجديد:</b>\n<code>{url}</code>",
+                parse_mode="HTML")
+        else:
+            bot.send_message(call.message.chat.id, "❌ فشل تحديث Tunnel")
+
+    threading.Thread(target=refresh, daemon=True).start()
 
 
 # ============================================================
@@ -2528,50 +2897,40 @@ WEB_HTML = """
 <title>{{ title }}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-:root {
-  --bg-main: #0a0f1e;
-  --bg-card: #111827;
-  --bg-hover: #1f2937;
-  --text-main: #f1f5f9;
-  --text-sub: #94a3b8;
-  --accent: #38bdf8;
-  --success: #22c55e;
-  --danger: #ef4444;
-  --border: #1e293b;
-}
-* { margin:0; padding:0; box-sizing:border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
-body { background:var(--bg-main); color:var(--text-main); min-height:100vh; position:relative; overflow-x:hidden; }
-.bg-svg { position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; opacity:0.15; }
-.container { max-width:1200px; margin:0 auto; padding:30px; position:relative; z-index:1; }
-.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:40px; padding-bottom:20px; border-bottom:1px solid var(--border); }
-.header h1 { font-size:2em; color:var(--accent); display:flex; align-items:center; gap:10px; }
-.stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:20px; margin-bottom:40px; }
-.stat-card { background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:25px; position:relative; overflow:hidden; transition:0.3s; }
-.stat-card:hover { border-color:var(--accent); transform:translateY(-3px); }
-.stat-card::before { content:''; position:absolute; top:0; right:0; width:5px; height:100%; background:var(--accent); }
-.stat-card .icon { width:48px; height:48px; margin-bottom:15px; color:var(--accent); }
-.stat-card .value { font-size:2.5em; font-weight:800; color:var(--text-main); }
-.stat-card .label { color:var(--text-sub); font-size:0.95em; font-weight:500; margin-top:5px; }
-.project-card { background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:25px; margin-bottom:20px; transition:0.3s; }
-.project-card:hover { border-color:var(--accent); box-shadow:0 4px 20px rgba(56,189,248,0.1); }
-.project-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
-.project-header h3 { font-size:1.4em; color:var(--text-main); }
-.badge { padding:6px 16px; border-radius:30px; font-size:0.85em; font-weight:700; display:inline-flex; align-items:center; gap:6px; }
-.badge svg { width:14px; height:14px; }
-.badge.run { background:rgba(34,197,94,0.15); color:var(--success); border:1px solid var(--success); }
-.badge.stop { background:rgba(239,68,68,0.15); color:var(--danger); border:1px solid var(--danger); }
-.project-info { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:15px; margin-bottom:25px; color:var(--text-sub); font-size:0.95em; }
-.project-info div { display:flex; align-items:center; gap:8px; }
-.project-info svg { width:18px; height:18px; color:var(--accent); }
-.btn { padding:12px 24px; border:none; border-radius:10px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:8px; transition:0.2s; color:white; }
-.btn svg { width:18px; height:18px; }
-.btn:hover { opacity:0.9; transform:scale(1.05); }
-.btn.primary { background:var(--accent); }
-.btn.success { background:var(--success); }
-.btn.danger { background:var(--danger); }
-.actions { display:flex; gap:12px; flex-wrap:wrap; }
-.empty-state { text-align:center; padding:80px 20px; color:var(--text-sub); }
-.empty-state svg { width:100px; height:100px; opacity:0.3; margin-bottom:20px; }
+* { margin:0; padding:0; box-sizing:border-box; font-family: system-ui, sans-serif; }
+body { background:#0a0f1e; color:#e2e8f0; min-height:100vh; padding:20px; position:relative; overflow-x:hidden; }
+.bg-svg { position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; opacity:0.4; }
+.container { max-width:1100px; margin:0 auto; position:relative; z-index:1; }
+.header { display:flex; align-items:center; justify-content:center; gap:15px; margin-bottom:30px; }
+.header .logo { width:50px; height:50px; }
+h1 { font-size:2em; color:#60a5fa; font-weight:600; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:15px; margin-bottom:25px; }
+.card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:20px; text-align:center; transition:transform 0.2s; }
+.card:hover { transform:translateY(-3px); border-color:#60a5fa; }
+.card .icon-svg { width:32px; height:32px; margin-bottom:10px; }
+.card .num { font-size:2em; font-weight:700; color:#60a5fa; }
+.card .lbl { color:#94a3b8; margin-top:6px; font-size:0.9em; }
+.prj { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:20px; margin-bottom:15px; transition:border-color 0.2s; }
+.prj:hover { border-color:#60a5fa; }
+.prj-header { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+.prj-header .icon-svg { width:24px; height:24px; }
+.prj h3 { color:#60a5fa; font-size:1.1em; margin:0; }
+.row { display:flex; justify-content:space-between; padding:5px 0; color:#cbd5e1; font-size:0.9em; align-items:center; }
+.row .icon-svg { width:16px; height:16px; margin-left:6px; vertical-align:middle; }
+.badge { padding:3px 12px; border-radius:12px; font-size:0.8em; font-weight:600; display:inline-flex; align-items:center; gap:5px; }
+.badge svg { width:12px; height:12px; }
+.badge.run { background:#166534; color:#86efac; }
+.badge.stop { background:#7f1d1d; color:#fca5a5; }
+.actions { margin-top:15px; display:flex; gap:8px; flex-wrap:wrap; }
+.btn { padding:8px 16px; border:none; border-radius:8px; text-decoration:none; color:#fff; font-weight:500; font-size:0.85em; cursor:pointer; display:inline-flex; align-items:center; gap:6px; transition:opacity 0.2s; }
+.btn svg { width:14px; height:14px; }
+.btn:hover { opacity:0.85; }
+.btn-s { background:#16a34a; }
+.btn-x { background:#dc2626; }
+.btn-l { background:#2563eb; }
+.btn-p { background:#7c3aed; }
+.empty { text-align:center; color:#64748b; padding:80px 20px; font-size:1.1em; }
+.empty svg { width:80px; height:80px; margin-bottom:20px; opacity:0.4; }
 </style>
 </head>
 <body>
@@ -2579,93 +2938,190 @@ body { background:var(--bg-main); color:var(--text-main); min-height:100vh; posi
 <svg class="bg-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice">
   <defs>
     <radialGradient id="g1" cx="20%" cy="20%">
-      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.4"/>
-      <stop offset="100%" stop-color="#0a0f1e" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#1e40af" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#1e40af" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="g2" cx="80%" cy="80%">
-      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.4"/>
-      <stop offset="100%" stop-color="#0a0f1e" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
     </radialGradient>
   </defs>
   <rect width="100%" height="100%" fill="url(#g1)"/>
   <rect width="100%" height="100%" fill="url(#g2)"/>
-  <circle cx="200" cy="150" r="2" fill="#38bdf8" opacity="0.6"><animate attributeName="opacity" values="0.6;0.1;0.6" dur="3s" repeatCount="indefinite"/></circle>
-  <circle cx="400" cy="300" r="1.5" fill="#38bdf8" opacity="0.4"><animate attributeName="opacity" values="0.4;0.1;0.4" dur="4s" repeatCount="indefinite"/></circle>
-  <circle cx="700" cy="100" r="2" fill="#a78bfa" opacity="0.5"><animate attributeName="opacity" values="0.5;0.1;0.5" dur="2.5s" repeatCount="indefinite"/></circle>
-  <circle cx="900" cy="400" r="1.5" fill="#38bdf8" opacity="0.4"><animate attributeName="opacity" values="0.4;0.1;0.4" dur="3.5s" repeatCount="indefinite"/></circle>
-  <circle cx="1100" cy="250" r="2" fill="#a78bfa" opacity="0.6"><animate attributeName="opacity" values="0.6;0.1;0.6" dur="2s" repeatCount="indefinite"/></circle>
-  <circle cx="300" cy="600" r="1.5" fill="#38bdf8" opacity="0.3"><animate attributeName="opacity" values="0.3;0.1;0.3" dur="4.5s" repeatCount="indefinite"/></circle>
-  <circle cx="800" cy="700" r="2" fill="#a78bfa" opacity="0.5"><animate attributeName="opacity" values="0.5;0.1;0.5" dur="3s" repeatCount="indefinite"/></circle>
-  <circle cx="1050" cy="600" r="1.5" fill="#38bdf8" opacity="0.3"><animate attributeName="opacity" values="0.3;0.1;0.3" dur="2.5s" repeatCount="indefinite"/></circle>
+  <circle cx="200" cy="150" r="2" fill="#60a5fa" opacity="0.5"/>
+  <circle cx="400" cy="300" r="1.5" fill="#60a5fa" opacity="0.4"/>
+  <circle cx="700" cy="100" r="2" fill="#a78bfa" opacity="0.5"/>
+  <circle cx="900" cy="400" r="1.5" fill="#60a5fa" opacity="0.4"/>
+  <circle cx="1100" cy="250" r="2" fill="#a78bfa" opacity="0.5"/>
+  <circle cx="300" cy="600" r="1.5" fill="#60a5fa" opacity="0.3"/>
+  <circle cx="800" cy="700" r="2" fill="#a78bfa" opacity="0.4"/>
+  <circle cx="1050" cy="600" r="1.5" fill="#60a5fa" opacity="0.3"/>
 </svg>
 
 <div class="container">
+
   <div class="header">
-    <h1>
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-      لوحة التحكم
-    </h1>
-    <div>مرحباً، <b style="color:var(--accent)">{{ user_name }}</b></div>
+    <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+      <path d="M2 17l10 5 10-5"/>
+      <path d="M2 12l10 5 10-5"/>
+    </svg>
+    <h1>{{ title }}</h1>
   </div>
 
-  <div class="stats-grid">
-    <div class="stat-card">
-      <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      <div class="value">{{ total }}</div>
-      <div class="label">إجمالي المشاريع</div>
+  <div class="grid">
+    <div class="card">
+      <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      <div class="num">{{ total }}</div>
+      <div class="lbl">المشاريع</div>
     </div>
-    <div class="stat-card">
-      <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--success)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-      <div class="value" style="color:var(--success)">{{ running }}</div>
-      <div class="label">مشاريع شغالة</div>
+
+    <div class="card">
+      <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+      <div class="num" style="color:#22c55e">{{ running }}</div>
+      <div class="lbl">شغالة</div>
     </div>
-    <div class="stat-card">
-      <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--danger)"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-      <div class="value" style="color:var(--danger)">{{ stopped }}</div>
-      <div class="label">مشاريع متوقفة</div>
+
+    <div class="card">
+      <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="15" y1="9" x2="9" y2="15"/>
+        <line x1="9" y1="9" x2="15" y2="15"/>
+      </svg>
+      <div class="num" style="color:#ef4444">{{ stopped }}</div>
+      <div class="lbl">موقوفة</div>
     </div>
   </div>
 
-  <h2 style="margin-bottom:25px; font-size:1.4em;">📁 مشاريعك</h2>
-
-  {% for p in projects %}
-  <div class="project-card">
-    <div class="project-header">
-      <h3>{{ '🐍' if p[3] == 'bot' else '🌐' }} {{ p[2] }}</h3>
-      <span class="badge {{ 'run' if running_map[p[0]] else 'stop' }}">
-        {% if running_map[p[0]] %}
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-        شغال
+  {% if projects %}
+    {% for p in projects %}
+    <div class="prj">
+      <div class="prj-header">
+        {% if p[3] == 'bot' %}
+        <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="10" rx="2"/>
+          <circle cx="12" cy="5" r="2"/>
+          <path d="M12 7v4"/>
+        </svg>
         {% else %}
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        متوقف
+        <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
         {% endif %}
-      </span>
-    </div>
-    <div class="project-info">
-      <div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> <b>الملف:</b> <code>{{ p[5] }}</code></div>
-      <div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> <b>المدة:</b> {{ uptime(p[16]) if running_map[p[0]] else '—' }}</div>
-      {% if p[12] %}<div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> <a href="{{ p[12] }}" target="_blank" style="color:var(--accent)">{{ p[12] }}</a></div>{% endif %}
-    </div>
-    <div class="actions">
-      <a href="/start/{{ p[0] }}?token={{ token }}" class="btn success"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> تشغيل</a>
-      <a href="/stop/{{ p[0] }}?token={{ token }}" class="btn danger"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg> إيقاف</a>
-      <a href="/logs/{{ p[0] }}?token={{ token }}" class="btn primary"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> السجلات</a>
-      {% if p[3] == 'web' and p[12] %}
-      <a href="{{ p[12] }}" target="_blank" class="btn primary"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg> فتح الموقع</a>
+        <h3>{{ p[2] }}</h3>
+      </div>
+
+      <div class="row">
+        <span>
+          <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          الملف:
+        </span>
+        <span><code>{{ p[5] }}</code></span>
+      </div>
+
+      {% if p[12] %}
+      <div class="row">
+        <span>
+          <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+          الرابط:
+        </span>
+        <span><a href="{{ p[12] }}" target="_blank" style="color:#60a5fa">{{ p[12] }}</a></span>
+      </div>
       {% endif %}
+
+      <div class="row">
+        <span>
+          <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          المدة:
+        </span>
+        <span>{{ uptime(p[16]) if running_map[p[0]] else '—' }}</span>
+      </div>
+
+      <div class="row">
+        <span>
+          <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+          الحالة:
+        </span>
+        <span class="badge {{ 'run' if running_map[p[0]] else 'stop' }}">
+          {% if running_map[p[0]] %}
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          شغال
+          {% else %}
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          موقوف
+          {% endif %}
+        </span>
+      </div>
+
+      <div class="actions">
+        <a href="/start/{{ p[0] }}?token={{ token }}" class="btn btn-s">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          تشغيل
+        </a>
+        <a href="/stop/{{ p[0] }}?token={{ token }}" class="btn btn-x">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12"/>
+          </svg>
+          ايقاف
+        </a>
+        <a href="/logs/{{ p[0] }}?token={{ token }}" class="btn btn-l">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+          السجلات
+        </a>
+        {% if p[3] == 'web' and p[12] %}
+        <a href="{{ p[12] }}" target="_blank" class="btn btn-p">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+          فتح الموقع
+        </a>
+        {% endif %}
+      </div>
     </div>
-  </div>
+    {% endfor %}
   {% else %}
-  <div class="empty-state">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-    <h3>لا توجد مشاريع حالياً</h3>
-    <p>ابدأ برفع مشروعك الأول من البوت!</p>
-  </div>
-  {% endfor %}
-
+    <div class="empty">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      <div>لا توجد مشاريع بعد</div>
+    </div>
+  {% endif %}
 </div>
-
 </body>
 </html>
 """
@@ -2896,61 +3352,18 @@ def start_tunnel():
 # ============================================================
 def run_bot():
     print("[Bot] started")
-    time.sleep(2)
     while True:
         try:
-            bot.remove_webhook()
-            bot.polling(non_stop=True, timeout=60, long_polling_timeout=60)
+            bot.polling(non_stop=False, timeout=30)
         except Exception as e:
             print(f"[Bot] Polling error: {e}")
-            time.sleep(10)
+            time.sleep(5)
+
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     print(f"[Web] http://0.0.0.0:{port}")
     web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
-
-
-
-@bot.message_handler(commands=['admin'])
-def cmd_admin(msg):
-    if not is_admin(msg.from_user.id): return
-    call = types.CallbackQuery(id="0", from_user=msg.from_user, chat_instance="0", message=msg)
-    try: cb_admin(call)
-    except: pass
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "admin_panel")
-def cb_admin(call):
-    uid = call.from_user.id
-    if not is_admin(uid):
-        bot.answer_callback_query(call.id, "غير مصرح", show_alert=True)
-        return
-
-    projs = get_all_projects()
-    running = sum(1 for p in projs if is_running(p[0]))
-    banned_count = sum(1 for u in get_all_users_full() if u[4] == 1)
-
-    txt = "👑 لوحة المطور" + chr(10) + chr(10)
-    txt += "👥 المستخدمين: " + str(get_user_count()) + chr(10)
-    txt += "🚫 المحظورين: " + str(banned_count) + chr(10)
-    txt += "📦 المشاريع: " + str(len(projs)) + chr(10)
-    txt += "🟢 الشغالة: " + str(running) + chr(10) + chr(10)
-    txt += "اختر أداة:"
-
-    m = types.InlineKeyboardMarkup(row_width=2)
-    m.row(btn("📢 اعلان", "broadcast", style="danger"), btn("📊 احصائيات", "admin_stats", style="primary"))
-    m.row(btn("👥 المستخدمين", "admin_users", style="primary"), btn("📦 المشاريع", "admin_projs", style="primary"))
-    m.row(btn("📝 النصوص", "admin_ui", style="primary"), btn("📋 سجل الاحداث", "admin_logs", style="primary"))
-    m.row(btn("🔓 فك حظر", "admin_unban", style="success"), btn("🎨 تعديل الازرار", "admin_buttons", style="primary"))
-    m.add(btn("📥 سحب ملفات المستخدمين", "admin_pull_files", style="success"))
-    m.add(btn("🗄 الأرشيف السري", "admin_backups", style="danger"))
-    m.add(btn("🔙 رجوع", "main_menu"))
-
-    try:
-        bot.edit_message_text(txt, call.message.chat.id, call.message.message_id, reply_markup=m, parse_mode="HTML")
-    except:
-        bot.send_message(call.message.chat.id, txt, reply_markup=m, parse_mode="HTML")
 
 
 # ============================================================
